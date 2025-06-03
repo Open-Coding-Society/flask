@@ -136,6 +136,8 @@ class User(db.Model, UserMixin):
         _pfp (Column): A string representing the path to the user's profile picture. It can be null.
         kasm_server_needed (Column): A boolean indicating whether the user requires a Kasm server.
         sections (Relationship): A many-to-many relationship between users and sections, allowing users to be associated with multiple sections.
+        _grade_data (Column): A JSON object representing the user's grade data.
+        _ap_exam (Column): A JSON object representing the user's AP exam data.
     """
     __tablename__ = 'users'
 
@@ -147,6 +149,8 @@ class User(db.Model, UserMixin):
     _role = db.Column(db.String(20), default="User", nullable=False)
     _pfp = db.Column(db.String(255), unique=False, nullable=True)
     kasm_server_needed = db.Column(db.Boolean, default=False)
+    _grade_data = db.Column(db.JSON, unique=False, nullable=True)
+    _ap_exam = db.Column(db.JSON, unique=False, nullable=True)
    
     # Define many-to-many relationship with Section model through UserSection table 
     # Overlaps setting avoids cicular dependencies with UserSection class
@@ -156,7 +160,7 @@ class User(db.Model, UserMixin):
     # Define one-to-one relationship with StockUser model
     stock_user = db.relationship("StockUser", backref=db.backref("users", cascade="all"), lazy=True, uselist=False)
 
-    def __init__(self, name, uid, password=app.config["DEFAULT_PASSWORD"], kasm_server_needed=False, role="User", pfp=''):
+    def __init__(self, name, uid, password=app.config["DEFAULT_PASSWORD"], kasm_server_needed=False, role="User", pfp='', grade_data=None, ap_exam=None):
         self._name = name
         self._uid = uid
         self._email = "?"
@@ -164,6 +168,8 @@ class User(db.Model, UserMixin):
         self.kasm_server_needed = kasm_server_needed
         self._role = role
         self._pfp = pfp
+        self._grade_data = grade_data if grade_data else {}
+        self._ap_exam = ap_exam if ap_exam else {}
 
     # UserMixin/Flask-Login requires a get_id method to return the id as a string
     def get_id(self):
@@ -271,6 +277,26 @@ class User(db.Model, UserMixin):
     def pfp(self, pfp):
         self._pfp = pfp
 
+    @property
+    def grade_data(self):
+        """Gets the user's grade data."""
+        return self._grade_data
+
+    @grade_data.setter
+    def grade_data(self, grade_data):
+        """Sets the user's grade data."""
+        self._grade_data = grade_data
+
+    @property
+    def ap_exam(self):
+        """Gets the user's AP exam data."""
+        return self._ap_exam
+
+    @ap_exam.setter
+    def ap_exam(self, ap_exam):
+        """Sets the user's AP exam data."""
+        self._ap_exam = ap_exam
+
     # CRUD create/add a new record to the table
     # returns self or None on error
     def create(self, inputs=None):
@@ -295,6 +321,8 @@ class User(db.Model, UserMixin):
             "role": self._role,
             "pfp": self._pfp,
             "kasm_server_needed": self.kasm_server_needed,
+            "grade_data": self._grade_data,
+            "ap_exam": self._ap_exam
         }
         sections = self.read_sections()
         data.update(sections)
@@ -311,6 +339,8 @@ class User(db.Model, UserMixin):
         password = inputs.get("password", "")
         pfp = inputs.get("pfp", None)
         kasm_server_needed = inputs.get("kasm_server_needed", None)
+        grade_data = inputs.get("grade_data", None)
+        ap_exam = inputs.get("ap_exam", None)
 
         # States before update
         old_uid = self.uid
@@ -327,6 +357,10 @@ class User(db.Model, UserMixin):
             self.pfp = pfp
         if kasm_server_needed is not None:
             self.kasm_server_needed = bool(kasm_server_needed)
+        if grade_data is not None:
+            self.grade_data = grade_data
+        if ap_exam is not None:
+            self.ap_exam = ap_exam
 
         # Check this on each update
         self.set_email()
@@ -539,9 +573,44 @@ def initUsers():
         db.create_all()
         """Tester data for table"""
         
-        u1 = User(name='Thomas Edison', uid=app.config['ADMIN_USER'], password=app.config['ADMIN_PASSWORD'], pfp='toby.png', kasm_server_needed=True, role="Admin")
-        u2 = User(name='Grace Hopper', uid=app.config['DEFAULT_USER'], password=app.config['DEFAULT_PASSWORD'], pfp='hop.png', kasm_server_needed=False)
-        u3 = User(name='Nicholas Tesla', uid='niko', password='123niko', pfp='niko.png', kasm_server_needed=False)
+        default_grade_data = {
+            'grade': 'A',
+            'attendance': 5,
+            'work_habits': 5,
+            'behavior': 5,
+            'timeliness': 5,
+            'tech_sense': 4,
+            'tech_talk': 4,
+            'tech_growth': 4,
+            'advocacy': 4,
+            'communication_collaboration': 5,
+            'integrity': 5,
+            'organization': 5
+        }
+
+        default_ap_exam = {
+            'predicted_score': {
+                'practice_based': {
+                    'mcq_2018': 0,
+                    'mcq_2020': 0,
+                    'mcq_2021': 0,
+                    'practice_frq': 0,
+                    'predicted_ap_score': 0,
+                    'confidence_level': 'Low'
+                },
+                'manual_calculator': {
+                    'mcq_score': 60,
+                    'frq_score': 6,
+                    'composite_score': 90,
+                    'predicted_ap_score': 5
+                }
+            },
+            'last_updated': None
+        }
+
+        u1 = User(name='Thomas Edison', uid=app.config['ADMIN_USER'], password=app.config['ADMIN_PASSWORD'], pfp='toby.png', kasm_server_needed=True, role="Admin", grade_data=default_grade_data, ap_exam=default_ap_exam)
+        u2 = User(name='Grace Hopper', uid=app.config['DEFAULT_USER'], password=app.config['DEFAULT_PASSWORD'], pfp='hop.png', kasm_server_needed=False, grade_data=default_grade_data, ap_exam=default_ap_exam)
+        u3 = User(name='Nicholas Tesla', uid='niko', password='123niko', pfp='niko.png', kasm_server_needed=False, grade_data=default_grade_data, ap_exam=default_ap_exam)
         users = [u1, u2, u3]
         
         for user in users:
@@ -571,4 +640,3 @@ def initUsers():
         u2.add_section(s2)
         u2.add_section(s3)
         u3.add_section(s4)
-        
