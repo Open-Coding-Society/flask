@@ -20,11 +20,13 @@ from api.pfp import pfp_api
 from api.stock import stock_api
 from api.analytics import analytics_api
 from api.student import student_api
+from api.score import score_api
 # database Initialization functions
 from model.user import User, initUsers
 from model.user import Section;
 from model.github import GitHubUser
 from api.analytics import get_date_range
+from model.score import Score
 # server only Views
 
 import os
@@ -44,7 +46,7 @@ app.register_blueprint(user_api)
 app.register_blueprint(section_api)
 app.register_blueprint(pfp_api) 
 app.register_blueprint(stock_api)
-
+app.register_blueprint(score_api)
 app.register_blueprint(analytics_api)
 app.register_blueprint(student_api)
 
