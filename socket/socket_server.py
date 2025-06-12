@@ -5,10 +5,10 @@ from flask import Flask
 app = Flask(__name__)
 
 socketio = SocketIO(app, cors_allowed_origins=[
-    "https://hypernova101.github.io",
     "http://localhost:8000",
     "http://127.0.0.1:8000",
-    "https://adik1025.github.io"
+    "https://open-coding-society.github.io",
+    "https://pages.opencodingsociety.com",
 ])
 
 
