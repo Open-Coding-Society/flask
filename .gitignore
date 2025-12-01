@@ -18,3 +18,4 @@ venv.bak/
 instance/volumes/
 instance/data.json
 instance/data.json.*.bak
+instance/data/jokes.json

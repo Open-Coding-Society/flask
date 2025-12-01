@@ -8,7 +8,7 @@ services:
                 ports:
                         - "8587:8587"
                 volumes:
-                        - ./instance:/instance
+                        - ./instance:/app/instance
                 restart: unless-stopped
 
         socketio:

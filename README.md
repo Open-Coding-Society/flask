@@ -1,6 +1,6 @@
 # README
 
-> This is a project to support AP Computer Science Principles (CSP) as well as a UC articulated Data Structures course. It was crafted iteratively starting in 2020 to the present time.  The primary purposes are ...
+> This is a project to support AP Computer Science Principles (APCSP) as well as a UC articulated Data Structures course. It was crafted iteratively starting in 2020 to the present time.  The primary purposes are ...
 
 - Used as starter code for student projects for `AP CSP 1 and 2` and `Data Structures 1` curriculum.
 - Used to teach key principles in learning the Python Flask programming environment.
@@ -14,9 +14,9 @@
 
 Use this project to create a Flask Server.
 
-- GitHub link: [flask](https://github.com/open-coding-society/flask)
-- The runtime link is published under the About on the GitHub link.
-- `Create a template from this repository` if you plan on making GitHub changes.
+- GitHub link: [flask](https://github.com/open-coding-society/flask), runtime link is published under the About on this same page.
+- `Use this as template` option is availble if you plan on making your instance of the repository.
+- `Fork` the repository if you plan to contribute though GitHub PRs.
 
 ## The conventional way to get started
 
@@ -60,7 +60,9 @@ pip install -r requirements.txt
   - Make a local `.env` file in root of project to contain your secret passwords
 
   ```shell
-  # Reset password for users who forget their password
+  # Port configuration
+  FLASK_PORT=8001
+  # Admin user reset password 
   DEFAULT_PASSWORD='123Qwerty!'
   # Admin user defaults
   ADMIN_USER='Thomas Edison'
@@ -103,12 +105,12 @@ pip install -r requirements.txt
     - Select/open `main.py` in VSCode
     - Start with Play button
       - Play button sub option contains Debug
-    - Click on loop back address in terminal to launch
-      - Output window will contain page to launch http://127.0.0.1:8587
-    - Login using your secrets
+    - Click on localhost:8087 in terminal to launch
+      - Output window will contain page to launch http://localhost:8587
+    - Login using your secrets from env
 
   - Basic API test
-    - [Jokes](http://127.0.0.1:8587/api/jokes)
+    - [Jokes](http://localhost:8587/api/jokes/)
 
 ### User Operations
 | Purpose | Correct Endpoint | What It Does |
@@ -152,15 +154,11 @@ pip install -r requirements.txt
 
 ### Files and Directories in this Project
 
-The key files and directories in this project are in these online articles.  However, this needs updating!!!
+The key files and directories in this project are in these online articles.
 
-[Flask Anatomy](https://pages.opencodingsociety.com/flask-anatomy)
+[Python/Flask](https://pages.opencodingsociety.com/python/flask)
 
-[Flask Files](https://pages.opencodingsociety.com/flask-structure-overview)
-
-Or read this entire series of articles starting with the Intro, Anatomy, and more ...
-
-[Flask Intro](https://pages.opencodingsociety.com/flask-intro)
+[Legacy - Flask Intro](https://pages.opencodingsociety.com/flask-overview)
 
 ### Implementation Summary
 
@@ -170,7 +168,7 @@ Or read this entire series of articles starting with the Intro, Anatomy, and mor
 
 - Work to make documentation materials useful.
 - Add gemini API's
-- Add flocker API's, social medai support
+- Add microblog API's, social medai support
 
 #### July 2024
 

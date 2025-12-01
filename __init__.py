@@ -13,7 +13,12 @@ load_dotenv()
 
 # Setup of key Flask object (app)
 app = Flask(__name__)
-app.config['JSON_AS_ASCII'] = False  # ✅ Allow emojis to show up correctly
+
+# Configure Flask Port, default to 8587 which is same as Docker setup
+app.config['FLASK_PORT'] = int(os.environ.get('FLASK_PORT') or 8587)
+
+# Configure Flask to handle JSON with UTF-8 encoding versus default ASCII
+app.config['JSON_AS_ASCII'] = False  # Allow emojis, non-ASCII characters in JSON responses
 
 
 # Initialize Flask-Login object
@@ -70,7 +75,6 @@ DB_USERNAME = os.environ.get('DB_USERNAME') or None
 DB_PASSWORD = os.environ.get('DB_PASSWORD') or None
 if DB_ENDPOINT and DB_USERNAME and DB_PASSWORD:
    # Production - Use MySQL
-  
    DB_PORT = '3306'
    DB_NAME = dbName
    dbString = f'mysql+pymysql://{DB_USERNAME}:{DB_PASSWORD}@{DB_ENDPOINT}:{DB_PORT}'
@@ -81,8 +85,7 @@ else:
    dbString = 'sqlite:///volumes/'
    dbURI = dbString + dbName + '.db'
    backupURI = dbString + dbName + '_bak.db'
-
-
+# Set database configuration in Flask app
 app.config['DB_ENDPOINT'] = DB_ENDPOINT
 app.config['DB_USERNAME'] = DB_USERNAME
 app.config['DB_PASSWORD'] = DB_PASSWORD
@@ -100,6 +103,10 @@ app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # maximum size of uploaded c
 app.config['UPLOAD_EXTENSIONS'] = ['.jpg', '.png', '.gif']  # supported file types
 app.config['UPLOAD_FOLDER'] = os.path.join(app.instance_path, 'uploads')
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+# Data folder for shared file-based storage
+app.config['DATA_FOLDER'] = os.path.join(app.instance_path, 'data')
+os.makedirs(app.config['DATA_FOLDER'], exist_ok=True)
 
 
 # GITHUB settings

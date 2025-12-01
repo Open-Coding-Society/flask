@@ -1,4 +1,5 @@
-import random
+import random, json, os, fcntl
+from flask import current_app
 
 jokes_data = []
 joke_list = [
@@ -24,83 +25,122 @@ joke_list = [
     'An SQL statement walks into a bar and sees two tables. It approaches, and asks may I join you?'
 ]
 
-# Initialize jokes
+def get_jokes_file():
+    # Always use Flask app.config['DATA_FOLDER'] for shared data
+    data_folder = current_app.config['DATA_FOLDER']
+    return os.path.join(data_folder, 'jokes.json')
+
+def _read_jokes_file():
+    JOKES_FILE = get_jokes_file()
+    if not os.path.exists(JOKES_FILE):
+        return []
+    with open(JOKES_FILE, 'r') as f:
+        fcntl.flock(f, fcntl.LOCK_SH)
+        try:
+            data = json.load(f)
+        except Exception:
+            data = []
+        fcntl.flock(f, fcntl.LOCK_UN)
+    return data
+
+def _write_jokes_file(data):
+    JOKES_FILE = get_jokes_file()
+    with open(JOKES_FILE, 'w') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        json.dump(data, f)
+        fcntl.flock(f, fcntl.LOCK_UN)
+
 def initJokes():
-    # setup jokes into a dictionary with id, joke, haha, boohoo
+    JOKES_FILE = get_jokes_file()
+    # Only initialize if file does not exist
+    if os.path.exists(JOKES_FILE):
+        return
+    jokes_data = []
     item_id = 0
     for item in joke_list:
         jokes_data.append({"id": item_id, "joke": item, "haha": 0, "boohoo": 0})
         item_id += 1
     # prime some haha responses
     for i in range(10):
-        id = getRandomJoke()['id']
-        addJokeHaHa(id)
-    # prime some haha responses
+        id = random.choice(jokes_data)['id']
+        jokes_data[id]['haha'] += 1
     for i in range(5):
-        id = getRandomJoke()['id']
-        addJokeBooHoo(id)
+        id = random.choice(jokes_data)['id']
+        jokes_data[id]['boohoo'] += 1
+    _write_jokes_file(jokes_data)
         
-# Return all jokes from jokes_data
 def getJokes():
-    return(jokes_data)
+    return _read_jokes_file()
 
-# Joke getter
 def getJoke(id):
-    return(jokes_data[id])
+    jokes = _read_jokes_file()
+    return jokes[id]
 
-# Return random joke from jokes_data
 def getRandomJoke():
-    return(random.choice(jokes_data))
+    jokes = _read_jokes_file()
+    return random.choice(jokes)
 
-# Liked joke
 def favoriteJoke():
+    jokes = _read_jokes_file()
     best = 0
     bestID = -1
-    for joke in getJokes():
+    for joke in jokes:
         if joke['haha'] > best:
             best = joke['haha']
             bestID = joke['id']
-    return jokes_data[bestID]
+    return jokes[bestID] if bestID != -1 else None
     
-# Jeered joke
 def jeeredJoke():
+    jokes = _read_jokes_file()
     worst = 0
     worstID = -1
-    for joke in getJokes():
+    for joke in jokes:
         if joke['boohoo'] > worst:
             worst = joke['boohoo']
             worstID = joke['id']
-    return jokes_data[worstID]
+    return jokes[worstID] if worstID != -1 else None
 
-# Add to haha for requested id
+
+# Atomic vote update with exclusive lock
+def _vote_joke(id, field):
+    JOKES_FILE = get_jokes_file()
+    with open(JOKES_FILE, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        jokes = json.load(f)
+        jokes[id][field] += 1
+        # Move file pointer to start before writing updated JSON
+        f.seek(0)
+        json.dump(jokes, f)
+        # Truncate file to remove any leftover data from previous content
+        f.truncate()
+        fcntl.flock(f, fcntl.LOCK_UN)
+    return jokes[id][field]
+
 def addJokeHaHa(id):
-    jokes_data[id]['haha'] = jokes_data[id]['haha'] + 1
-    return jokes_data[id]['haha']
+    return _vote_joke(id, 'haha')
 
-# Add to boohoo for requested id
 def addJokeBooHoo(id):
-    jokes_data[id]['boohoo'] = jokes_data[id]['boohoo'] + 1
-    return jokes_data[id]['boohoo']
+    return _vote_joke(id, 'boohoo')
 
-# Pretty Print joke
 def printJoke(joke):
     print(joke['id'], joke['joke'], "\n", "haha:", joke['haha'], "\n", "boohoo:", joke['boohoo'], "\n")
 
-# Number of jokes
 def countJokes():
-    return len(jokes_data)
+    jokes = _read_jokes_file()
+    return len(jokes)
 
-# Test Joke Model
 if __name__ == "__main__": 
     initJokes()  # initialize jokes
     
     # Most likes and most jeered
     best = favoriteJoke()
-    print("Most liked", best['haha'])
-    printJoke(best)
+    if best:
+        print("Most liked", best['haha'])
+        printJoke(best)
     worst = jeeredJoke()
-    print("Most jeered", worst['boohoo'])
-    printJoke(worst)
+    if worst:
+        print("Most jeered", worst['boohoo'])
+        printJoke(worst)
     
     # Random joke
     print("Random joke")

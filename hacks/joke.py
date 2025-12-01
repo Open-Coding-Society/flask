@@ -52,17 +52,17 @@ class JokesAPI:
             return jsonify(getJoke(id))
 
     # building RESTapi resources/interfaces, these routes are added to Web Server
-    api.add_resource(_Create, '/create/<string:joke>')
-    api.add_resource(_Read, '/')
-    api.add_resource(_ReadID, '/<int:id>')
-    api.add_resource(_ReadRandom, '/random')
-    api.add_resource(_ReadCount, '/count')
-    api.add_resource(_UpdateLike, '/like/<int:id>')
-    api.add_resource(_UpdateJeer, '/jeer/<int:id>')
-    
+    api.add_resource(_Create, '/create/<string:joke>', '/create/<string:joke>/')
+    api.add_resource(_Read, "", '/')
+    api.add_resource(_ReadID, '/<int:id>', '/<int:id>/')
+    api.add_resource(_ReadRandom, '/random', '/random/')
+    api.add_resource(_ReadCount, '/count', '/count/')
+    api.add_resource(_UpdateLike, '/like/<int:id>', '/like/<int:id>/')
+    api.add_resource(_UpdateJeer, '/jeer/<int:id>', '/jeer/<int:id>/')
+
 if __name__ == "__main__": 
     # server = "http://127.0.0.1:5000" # run local
-    server = 'https://flask.nighthawkcodingsociety.com' # run from web
+    server = 'https://flask.opencodingsociety.com' # run from web
     url = server + "/api/jokes"
     responses = []  # responses list
 

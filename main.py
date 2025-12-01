@@ -81,6 +81,10 @@ app.register_blueprint(joke_api)  # Register the joke API blueprint
 app.register_blueprint(post_api)  # Register the social media post API
 # app.register_blueprint(announcement_api) ##temporary revert
 
+# Jokes file initialization
+with app.app_context():
+    initJokes()
+
 # Tell Flask-Login the view function name of your login route
 login_manager.login_view = "login"
 
@@ -312,8 +316,7 @@ app.cli.add_command(custom_cli)
         
 # this runs the flask application on the development server
 if __name__ == "__main__":
-    initJokes() # in memory initialization of jokes
     host = "0.0.0.0"
-    port = 8587
+    port = app.config['FLASK_PORT']
     print(f"** Server running: http://localhost:{port}")  # Pretty link
     app.run(debug=True, host=host, port=port, use_reloader=False)
