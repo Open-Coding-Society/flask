@@ -19,13 +19,17 @@ class Assignment(db.Model):
     _class_name = db.Column(db.String(255), nullable=False)
     _score = db.Column(db.Float, default=0.0)
     _content = db.Column(db.JSON, nullable=False) # List of filenames
+    _notes = db.Column(db.Text, nullable=True)
+    _link = db.Column(db.String(512), nullable=True)
 
-    def __init__(self, uid, title, class_name, content=None, score=0.0):
+    def __init__(self, uid, title, class_name, content=None, score=0.0, notes=None, link=None):
         self._uid = uid
         self._title = title
         self._class_name = class_name
         self._content = content if content else []
         self._score = score
+        self._notes = notes
+        self._link = link
 
     @property
     def uid(self):
@@ -47,6 +51,22 @@ class Assignment(db.Model):
     def content(self):
         return self._content
 
+    @property
+    def notes(self):
+        return self._notes
+    
+    @notes.setter
+    def notes(self, notes):
+        self._notes = notes
+
+    @property
+    def link(self):
+        return self._link
+    
+    @link.setter
+    def link(self, link):
+        self._link = link
+
     def create(self):
         try:
             db.session.add(self)
@@ -64,7 +84,9 @@ class Assignment(db.Model):
             "title": self.title,
             "class": self.class_name,
             "score": self.score,
-            "content": self.content
+            "content": self.content,
+            "notes": self.notes,
+            "link": self.link
         }
 
     def update(self, inputs):
@@ -75,9 +97,17 @@ class Assignment(db.Model):
             return self
             
         score = inputs.get("score")
+        notes = inputs.get("notes")
+        link = inputs.get("link")
         
         if score is not None:
             self._score = float(score)
+
+        if notes is not None:
+             self._notes = notes
+             
+        if link is not None:
+             self._link = link
 
         try:
             db.session.commit()

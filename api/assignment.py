@@ -19,7 +19,9 @@ class _Assignment(Resource):
             "uploads": [
                 {"file": "base64_string", "filename": "notes.pdf"},
                 {"file": "base64_string", "filename": "notebook.ipynb"}
-            ]
+            ],
+            "notes": "Optional notes",
+            "link": "Optional link"
         }
         """
         data = request.get_json()
@@ -30,6 +32,8 @@ class _Assignment(Resource):
         title = data.get('title')
         class_name = data.get('class')
         uploads = data.get('uploads', [])
+        notes = data.get('notes')
+        link = data.get('link')
         
         if not uid or not title or not class_name:
             return {'message': 'UID, Title, and Class are required'}, 400
@@ -50,7 +54,7 @@ class _Assignment(Resource):
                         return {'message': f'Failed to upload file: {filename}'}, 500
             
             # Create Database Record
-            assignment = Assignment(uid, title, class_name, uploaded_files)
+            assignment = Assignment(uid, title, class_name, uploaded_files, notes=notes, link=link)
             created_assignment = assignment.create()
             
             if created_assignment:
@@ -69,7 +73,9 @@ class _Assignment(Resource):
         {
             "uid": "student_uid",
             "title": "Assignment Title",
-            "score": 95.5
+            "score": 95.5,
+            "notes": "Updated notes",
+            "link": "Updated link"
         }
         """
         data = request.get_json()
@@ -79,18 +85,20 @@ class _Assignment(Resource):
         uid = data.get('uid')
         title = data.get('title')
         score = data.get('score')
+        notes = data.get('notes')
+        link = data.get('link')
         
         if not uid or not title:
             return {'message': 'UID and Title are required to identify assignment'}, 400
             
-        if score is None:
-            return {'message': 'Score is required for update'}, 400
+        if score is None and notes is None and link is None:
+            return {'message': 'Score, notes, or link is required for update'}, 400
 
         assignment = Assignment.query.filter_by(_uid=uid, _title=title).first()
         if not assignment:
             return {'message': 'Assignment not found'}, 404
 
-        updated_assignment = assignment.update({"score": score})
+        updated_assignment = assignment.update({"score": score, "notes": notes, "link": link})
         if updated_assignment:
             return updated_assignment.read(), 200
         else:
@@ -99,14 +107,10 @@ class _Assignment(Resource):
     @token_required()
     def get(self):
         """
-        Get all assignments for a user (by UID query param).
+        Get all assignments.
         Returns list of assignments with base64 encoded file content.
         """
-        uid = request.args.get('uid')
-        if not uid:
-            return {'message': 'UID required'}, 400
-            
-        assignments = Assignment.query.filter_by(_uid=uid).all()
+        assignments = Assignment.query.all()
         results = []
         
         for assignment in assignments:
