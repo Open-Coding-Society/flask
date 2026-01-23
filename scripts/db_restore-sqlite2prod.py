@@ -55,8 +55,8 @@ IMPORT_ENDPOINTS = {
 }
 
 # Hardcoded credentials for production authentication
-UID = "toby"
-PASSWORD = "NH25ccc@^"
+UID = app.config['ADMIN_UID']
+PASSWORD = app.config['ADMIN_PASSWORD']
 
 # Import app config for default data filtering
 try:
