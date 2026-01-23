@@ -57,7 +57,7 @@ def detect_mood():
             
             return jsonify({
                 'mood': dominant_emotion,
-                'probabilities': emotion_probabilities
+                # 'probabilities': emotion_probabilities
             }), 200
 
         except Exception as e:
