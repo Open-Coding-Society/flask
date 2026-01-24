@@ -224,6 +224,8 @@ If you are working with the database, follow the below procedure to safely inter
 
 Note, steps 1,2,3,5 are on your development (LOCAL) server. You need to update your .env on development server and be sure all PRs are completed, pulled, and tested before you start pushing to production.
 
+0. Be sure ADMIN_PASSWORD is set in .env.  You will need a venv for the python scripts.
+
 1. Initialize your local DB with clean data. For example, this would be good to see that a schema update works correctly.
    ```bash
    python scripts/db_init.py
