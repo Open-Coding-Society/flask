@@ -63,11 +63,11 @@ app.config['USER_PFP'] = os.environ.get('USER_PFP') or 'default.png'
 app.config['DEFAULT_PASSWORD'] = os.environ.get('DEFAULT_PASSWORD') or 'password'
 app.config['DEFAULT_PFP'] = os.environ.get('DEFAULT_PFP') or 'default.png'
 # Convenience user
-app.config['CONVENIENCE_USER'] = os.environ.get('CONVENIENCE_USER') or 'convenience'
-app.config['CONVENIENCE_UID'] = os.environ.get('CONVENIENCE_UID') or 'convenience'
-app.config['CONVENIENCE_PASSWORD'] = os.environ.get('CONVENIENCE_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or 'password'
-app.config['CONVENIENCE_PFP'] = os.environ.get('CONVENIENCE_PFP') or 'default.png'
-app.config['CONVENIENCE_ROLE'] = os.environ.get('CONVENIENCE_ROLE') or 'User'
+app.config['MY_NAME'] = os.environ.get('MY_NAME') or 'convenience'
+app.config['MY_UID'] = os.environ.get('MY_UID') or 'convenience'
+app.config['MY_PASSWORD'] = os.environ.get('MY_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or 'password'
+app.config['MY_PFP'] = os.environ.get('MY_PFP') or 'default.png'
+app.config['MY_ROLE'] = os.environ.get('MY_ROLE') or 'User'
 
 
 # Browser settings

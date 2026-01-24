@@ -83,7 +83,7 @@ pip install -r requirements.txt
   # Convience user defaults
   MY_NAME='John Mortensen'
   MY_UID='jm1021'
-  MY_ROLE='Teacher'
+  MY_ROLE='admin'
   # Obtain key, [Google AI Studio](https://aistudio.google.com/api-keys)
   GEMINI_API_KEY=xxxxx
   GEMINI_SERVER=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
