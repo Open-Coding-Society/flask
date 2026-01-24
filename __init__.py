@@ -55,13 +55,19 @@ app.config['TEACHER_UID'] = os.environ.get('TEACHER_UID') or 'teacher'
 app.config['TEACHER_PASSWORD'] = os.environ.get('TEACHER_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or 'password'
 app.config['TEACHER_PFP'] = os.environ.get('TEACHER_PFP') or 'default.png'
 # Default User Defaults
-app.config['DEFAULT_USER'] = os.environ.get('DEFAULT_USER') or 'User Name'
-app.config['DEFAULT_UID'] = os.environ.get('DEFAULT_UID') or 'user'
-app.config['DEFAULT_USER_PASSWORD'] = os.environ.get('DEFAULT_USER_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or 'password'
-app.config['DEFAULT_USER_PFP'] = os.environ.get('DEFAULT_USER_PFP') or 'default.png'
-# Reset Defaults
+app.config['USER_NAME'] = os.environ.get('USER_NAME') or 'User Name'
+app.config['USER_UID'] = os.environ.get('USER_UID') or 'user'
+app.config['USER_PASSWORD'] = os.environ.get('USER_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or 'password'
+app.config['USER_PFP'] = os.environ.get('USER_PFP') or 'default.png'
+# Defaults
 app.config['DEFAULT_PASSWORD'] = os.environ.get('DEFAULT_PASSWORD') or 'password'
 app.config['DEFAULT_PFP'] = os.environ.get('DEFAULT_PFP') or 'default.png'
+# Convenience user
+app.config['CONVENIENCE_USER'] = os.environ.get('CONVENIENCE_USER') or 'convenience'
+app.config['CONVENIENCE_UID'] = os.environ.get('CONVENIENCE_UID') or 'convenience'
+app.config['CONVENIENCE_PASSWORD'] = os.environ.get('CONVENIENCE_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or 'password'
+app.config['CONVENIENCE_PFP'] = os.environ.get('CONVENIENCE_PFP') or 'default.png'
+app.config['CONVENIENCE_ROLE'] = os.environ.get('CONVENIENCE_ROLE') or 'User'
 
 
 # Browser settings
