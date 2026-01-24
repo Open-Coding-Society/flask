@@ -675,7 +675,7 @@ def initUsers():
 
         u1 = User(name=app.config['ADMIN_USER'], uid=app.config['ADMIN_UID'], password=app.config['ADMIN_PASSWORD'], pfp=app.config['ADMIN_PFP'], kasm_server_needed=True, role="Admin")
         u2 = User(name=app.config['DEFAULT_USER'], uid=app.config['DEFAULT_UID'], password=app.config['DEFAULT_USER_PASSWORD'], pfp=app.config['DEFAULT_USER_PFP'])
-        u3 = User(name='Nicholas Tesla', uid='niko', pfp='niko.png', role='Teacher', password=app.config['DEFAULT_USER_PASSWORD'])
+        u3 = User(name=app.config['TEACHER_USER'], uid=app.config['TEACHER_UID'], pfp=app.config['TEACHER_PFP'], role='Teacher', password=app.config['TEACHER_PASSWORD'])
 
 
         users = [u1, u2, u3]

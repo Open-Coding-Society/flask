@@ -49,6 +49,11 @@ app.config['ADMIN_USER'] = os.environ.get('ADMIN_USER') or 'Admin Name'
 app.config['ADMIN_UID'] = os.environ.get('ADMIN_UID') or 'admin'
 app.config['ADMIN_PASSWORD'] = os.environ.get('ADMIN_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or 'password'
 app.config['ADMIN_PFP'] = os.environ.get('ADMIN_PFP') or 'default.png'
+# Teacher Defaults
+app.config['TEACHER_USER'] = os.environ.get('TEACHER_USER') or 'Teacher Name'
+app.config['TEACHER_UID'] = os.environ.get('TEACHER_UID') or 'teacher'
+app.config['TEACHER_PASSWORD'] = os.environ.get('TEACHER_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or 'password'
+app.config['TEACHER_PFP'] = os.environ.get('TEACHER_PFP') or 'default.png'
 # Default User Defaults
 app.config['DEFAULT_USER'] = os.environ.get('DEFAULT_USER') or 'User Name'
 app.config['DEFAULT_UID'] = os.environ.get('DEFAULT_UID') or 'user'
