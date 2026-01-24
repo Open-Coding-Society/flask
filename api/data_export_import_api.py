@@ -6,7 +6,7 @@ Used by db_migrate and db_restore scripts for database migration.
 
 from flask import Blueprint, request, jsonify, g
 from flask_restful import Api, Resource
-from api.jwt_authorize import token_required
+from api.authorize import token_required
 from __init__ import db
 
 # Import all models

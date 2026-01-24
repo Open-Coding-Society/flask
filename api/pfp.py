@@ -1,6 +1,6 @@
 from flask import Blueprint, g, request
 from flask_restful import Api, Resource
-from api.jwt_authorize import token_required
+from api.authorize import token_required
 from model.user import User
 from model.pfp import pfp_base64_decode, pfp_base64_upload, pfp_file_delete
 
