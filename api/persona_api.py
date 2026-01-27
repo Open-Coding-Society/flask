@@ -210,7 +210,7 @@ class PersonaAPI:
     
     class _FormGroups(Resource):
         def post(self):
-            """Form optimal groups based on personas"""
+            """Form optimal groups based on personas with proper weighting"""
             body = request.get_json()
             
             user_uids = body.get('user_uids', [])
@@ -221,6 +221,9 @@ class PersonaAPI:
             
             if len(user_uids) < 2:
                 return {'message': 'Need at least 2 users'}, 400
+            
+            if group_size < 2 or group_size > 6:
+                return {'message': 'Group size must be between 2 and 6'}, 400
             
             # Query using _uid (the actual database column)
             users = User.query.filter(User._uid.in_(user_uids)).all()
@@ -236,12 +239,12 @@ class PersonaAPI:
             # Create uid->user mapping for quick lookup
             uid_to_user = {u.uid: u for u in users}
             
-            # Form groups using randomized search
+            # Form groups using randomized search with weighted scoring
             import random
             
             best_grouping = None
             best_avg_score = 0
-            iterations = 50
+            iterations = 100  # Increased iterations for better optimization
             
             for _ in range(iterations):
                 shuffled = user_uids.copy()
@@ -256,14 +259,14 @@ class PersonaAPI:
                     # Get users for this group
                     group_users = [uid_to_user[uid] for uid in group_uids]
                     
-                    # Calculate score
+                    # Calculate weighted score
                     group_personas_list = []
                     for user in group_users:
                         personas = UserPersona.query.filter_by(user_id=user.id).all()
                         if personas:
                             group_personas_list.append(personas)
                     
-                    score = UserPersona.calculate_team_score(group_personas_list) if group_personas_list else 0.0
+                    score = UserPersona.calculate_weighted_team_score(group_personas_list) if group_personas_list else 0.0
                     
                     groups.append({
                         'user_uids': group_uids,
@@ -272,7 +275,7 @@ class PersonaAPI:
                     
                     remaining = remaining[group_size:]
                 
-                # Handle leftovers
+                # Handle leftovers (groups smaller than desired size)
                 if remaining:
                     group_users = [uid_to_user[uid] for uid in remaining]
                     
@@ -282,14 +285,14 @@ class PersonaAPI:
                         if personas:
                             group_personas_list.append(personas)
                     
-                    score = UserPersona.calculate_team_score(group_personas_list) if group_personas_list else 0.0
+                    score = UserPersona.calculate_weighted_team_score(group_personas_list) if group_personas_list else 0.0
                     
                     groups.append({
                         'user_uids': remaining,
                         'team_score': score
                     })
                 
-                # Calculate average
+                # Calculate average score for this iteration
                 avg_score = sum(g['team_score'] for g in groups) / len(groups)
                 
                 if avg_score > best_avg_score:
@@ -299,9 +302,9 @@ class PersonaAPI:
             return {
                 'groups': best_grouping,
                 'average_score': round(best_avg_score, 2)
-            }, 200    
-        
-    
+            }, 200
+
+
     class _UserPersona(Resource):
         @token_required()
         def post(self):
