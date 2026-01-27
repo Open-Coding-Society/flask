@@ -4,7 +4,7 @@ Handles CRUD operations for micro blog posts, replies, reactions, and topics
 """
 from flask import Blueprint, request, jsonify, g
 from flask_restful import Api, Resource
-from api.jwt_authorize import token_required
+from api.authorize import token_required
 from model.microblog import MicroBlog, Topic
 from __init__ import db
 
@@ -467,7 +467,7 @@ class TopicAPI:
            current_user = None
            try:
                # Try to get user from token if provided, but don't require it
-               from api.jwt_authorize import get_current_user
+               from api.authorize import get_current_user
                current_user = get_current_user()
            except:
                pass  # No auth provided, continue as anonymous

@@ -6,9 +6,7 @@ from flask_login import current_user, login_user, logout_user
 from flask.cli import AppGroup
 from flask_login import current_user, login_required
 from flask import current_app
-from werkzeug.security import generate_password_hash
 from dotenv import load_dotenv
-from api.jwt_authorize import token_required
 
 # import "objects" from "this" project
 from __init__ import app, db, login_manager  # Key Flask objects 

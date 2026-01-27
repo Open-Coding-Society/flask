@@ -61,19 +61,29 @@ pip install -r requirements.txt
 
   ```shell
   # Port configuration
-  FLASK_PORT=8001
+  # FLASK_PORT=8001
   # Admin user reset password 
   DEFAULT_PASSWORD='123Qwerty!'
+  DEFAULT_PFP='default.png'
   # Admin user defaults
   ADMIN_USER='Thomas Edison'
   ADMIN_UID='toby'
   ADMIN_PASSWORD='123Toby!'
   ADMIN_PFP='toby.png'
-  # Create a default user for the system
-  DEFAULT_USER='Grace Hopper'
-  DEFAULT_UID='hop'
-  DEFAULT_USER_PASSWORD='123Hop!'
-  DEFAULT_USER_PFP='hop.png'
+  # Teacher user defaults
+  TEACHER_USER='Nikola Tesla'
+  TEACHER_UID='niko'
+  TEACHER_PASSWORD='123Niko!'
+  TEACHER_PFP='niko.png'
+  # Default user for testing 
+  USER_NAME='Grace Hopper'
+  USER_UID='hop'
+  USER_PASSWORD='123Hop!'
+  USER_PFP='hop.png'
+  # Convience user defaults
+  MY_NAME='John Mortensen'
+  MY_UID='jm1021'
+  MY_ROLE='admin'
   # Obtain key, [Google AI Studio](https://aistudio.google.com/api-keys)
   GEMINI_API_KEY=xxxxx
   GEMINI_SERVER=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
@@ -213,6 +223,8 @@ The key files and directories in this project are in these online articles.
 If you are working with the database, follow the below procedure to safely interact with the remote DB while applying changes locally. Certain scripts require flask to be running while others don't, so follow the instructions that the scripts provide.
 
 Note, steps 1,2,3,5 are on your development (LOCAL) server. You need to update your .env on development server and be sure all PRs are completed, pulled, and tested before you start pushing to production.
+
+0. Be sure ADMIN_PASSWORD is set in .env.  You will need a venv for the python scripts.
 
 1. Initialize your local DB with clean data. For example, this would be good to see that a schema update works correctly.
    ```bash

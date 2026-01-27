@@ -798,7 +798,7 @@ def main():
             tables = inspector.get_table_names()
             
             if tables:
-                print("Warning, you are about to lose all data in the database!")
+                print("Warning, you are about to lose all data in your local sqlite database!")
                 print("Do you want to continue? (y/n)")
                 response = input()
                 if response.lower() != 'y':

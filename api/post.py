@@ -7,7 +7,7 @@ from flask_restful import Api, Resource
 from __init__ import db
 from model.post import Post
 from model.user import User
-from api.jwt_authorize import token_required
+from api.authorize import token_required
 
 
 # Create Blueprint
