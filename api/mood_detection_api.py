@@ -6,9 +6,15 @@ import numpy as np
 import os
 import tempfile
 
+from flask_cors import CORS, cross_origin
+
+
 mood_detection_api = Blueprint('mood_detection_api', __name__, url_prefix='/api/mood')
+CORS(mood_detection_api, supports_credentials=True, resources={r"/detect": {"origins": "*"}})
 
 @mood_detection_api.route('/detect', methods=['POST'])
+@cross_origin(origins="*", supports_credentials=True)
+
 def detect_mood():
     """
     Detects the mood of a person in the provided image.
@@ -61,6 +67,8 @@ def detect_mood():
             }), 200
 
         except Exception as e:
+             import traceback
+             traceback.print_exc()
              return jsonify({'error': f'Error analyzing image: {str(e)}'}), 500
         finally:
             # Clean up the temporary file
@@ -68,4 +76,6 @@ def detect_mood():
                 os.remove(temp_file_path)
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': f'An unexpected error occurred: {str(e)}'}), 500
