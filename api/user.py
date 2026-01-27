@@ -3,7 +3,7 @@ from flask import Blueprint, app, request, jsonify, current_app, Response, g
 from flask_restful import Api, Resource # used for REST API building
 from datetime import datetime
 from __init__ import app, db
-from api.jwt_authorize import token_required
+from api.authorize import token_required
 from model.user import User
 from model.github import GitHubUser
 import os

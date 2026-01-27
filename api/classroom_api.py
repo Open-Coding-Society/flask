@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify, g
 from __init__ import db
 from model.classroom import Classroom
 from model.user import User
-from api.jwt_authorize import token_required
+from api.authorize import token_required
 
 classroom_api = Blueprint('classroom_api', __name__, url_prefix='/api/classrooms')
 
