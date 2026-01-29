@@ -7,6 +7,7 @@ from flask.cli import AppGroup
 from flask_login import current_user, login_required
 from flask import current_app
 from dotenv import load_dotenv
+from api.api_ainpc import ainpc_api
 
 # import "objects" from "this" project
 from __init__ import app, db, login_manager  # Key Flask objects 
@@ -58,6 +59,9 @@ app.config['KASM_SERVER'] = os.getenv('KASM_SERVER')
 app.config['KASM_API_KEY'] = os.getenv('KASM_API_KEY')
 app.config['KASM_API_KEY_SECRET'] = os.getenv('KASM_API_KEY_SECRET')
 
+from flask_cors import CORS
+CORS(app)  # This allows all origins, your frontend can now call /api/ainpc/prompt
+
 
 
 # register URIs for api endpoints
@@ -70,7 +74,7 @@ app.register_blueprint(pfp_api)
 app.register_blueprint(groq_api)
 app.register_blueprint(gemini_api)
 app.register_blueprint(microblog_api)
-
+app.register_blueprint(ainpc_api)
 app.register_blueprint(analytics_api)
 app.register_blueprint(student_api)
 # app.register_blueprint(grade_api)
