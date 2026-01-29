@@ -10,6 +10,14 @@ persona_api = Blueprint('persona_api', __name__, url_prefix='/api')
 # API docs https://flask-restful.readthedocs.io/en/latest/api.html
 api = Api(persona_api)
 
+# Category weights for matching algorithms
+CATEGORY_WEIGHTS = {
+    'student': 50,      # Highest priority
+    'social': 25,
+    'achievement': 25,
+    'fantasy': 0        # Display only
+}
+
 class PersonaAPI:        
     
     class _Create(Resource):
@@ -199,9 +207,10 @@ class PersonaAPI:
                 'members': members_detail,
                 'evaluation': evaluation
             }, 200
+    
     class _FormGroups(Resource):
         def post(self):
-            """Form optimal groups based on personas"""
+            """Form optimal groups based on personas with proper weighting"""
             body = request.get_json()
             
             user_uids = body.get('user_uids', [])
@@ -212,6 +221,9 @@ class PersonaAPI:
             
             if len(user_uids) < 2:
                 return {'message': 'Need at least 2 users'}, 400
+            
+            if group_size < 2 or group_size > 6:
+                return {'message': 'Group size must be between 2 and 6'}, 400
             
             # Query using _uid (the actual database column)
             users = User.query.filter(User._uid.in_(user_uids)).all()
@@ -227,12 +239,12 @@ class PersonaAPI:
             # Create uid->user mapping for quick lookup
             uid_to_user = {u.uid: u for u in users}
             
-            # Form groups using randomized search
+            # Form groups using randomized search with weighted scoring
             import random
             
             best_grouping = None
             best_avg_score = 0
-            iterations = 50
+            iterations = 100  # Increased iterations for better optimization
             
             for _ in range(iterations):
                 shuffled = user_uids.copy()
@@ -247,14 +259,14 @@ class PersonaAPI:
                     # Get users for this group
                     group_users = [uid_to_user[uid] for uid in group_uids]
                     
-                    # Calculate score
+                    # Calculate weighted score
                     group_personas_list = []
                     for user in group_users:
                         personas = UserPersona.query.filter_by(user_id=user.id).all()
                         if personas:
                             group_personas_list.append(personas)
                     
-                    score = UserPersona.calculate_team_score(group_personas_list) if group_personas_list else 0.0
+                    score = UserPersona.calculate_weighted_team_score(group_personas_list) if group_personas_list else 0.0
                     
                     groups.append({
                         'user_uids': group_uids,
@@ -263,7 +275,7 @@ class PersonaAPI:
                     
                     remaining = remaining[group_size:]
                 
-                # Handle leftovers
+                # Handle leftovers (groups smaller than desired size)
                 if remaining:
                     group_users = [uid_to_user[uid] for uid in remaining]
                     
@@ -273,14 +285,14 @@ class PersonaAPI:
                         if personas:
                             group_personas_list.append(personas)
                     
-                    score = UserPersona.calculate_team_score(group_personas_list) if group_personas_list else 0.0
+                    score = UserPersona.calculate_weighted_team_score(group_personas_list) if group_personas_list else 0.0
                     
                     groups.append({
                         'user_uids': remaining,
                         'team_score': score
                     })
                 
-                # Calculate average
+                # Calculate average score for this iteration
                 avg_score = sum(g['team_score'] for g in groups) / len(groups)
                 
                 if avg_score > best_avg_score:
@@ -290,16 +302,15 @@ class PersonaAPI:
             return {
                 'groups': best_grouping,
                 'average_score': round(best_avg_score, 2)
-            }, 200    
-        
-    
+            }, 200
+
+
     class _UserPersona(Resource):
         @token_required()
         def post(self):
-            """User selects their persona (replaces existing if any)"""
+            """User selects a persona for a specific category (one per category)"""
             body = request.get_json()
             persona_id = body.get('persona_id')
-            weight = body.get('weight', 1)
             
             if not persona_id:
                 return {'message': 'persona_id is required'}, 400
@@ -314,18 +325,27 @@ class PersonaAPI:
             if not persona:
                 return {'message': 'Persona not found'}, 404
             
-            # Check if user already has THIS exact persona
-            existing = UserPersona.query.filter_by(
-                user_id=current_user.id,
-                persona_id=persona_id
+            # Get the category of the selected persona
+            category = persona._category
+            
+            # Get weight based on category
+            weight = CATEGORY_WEIGHTS.get(category, 1)
+            
+            # Check if user already has a persona in this category
+            existing = UserPersona.query.join(Persona).filter(
+                UserPersona.user_id == current_user.id,
+                Persona._category == category
             ).first()
             
-            if existing:
+            # If they already selected this exact persona, return error
+            if existing and existing.persona_id == persona_id:
                 return {'message': 'Persona already selected'}, 400
             
-            UserPersona.query.filter_by(user_id=current_user.id).delete()
+            # Delete old persona in this category (if exists)
+            if existing:
+                db.session.delete(existing)
             
-            # Create new assignment
+            # Create new assignment with category-based weight
             user_persona = UserPersona(
                 user=current_user,
                 persona=persona,
@@ -335,21 +355,36 @@ class PersonaAPI:
             try:
                 db.session.add(user_persona)
                 db.session.commit()
-                return {'message': 'Persona selected', 'persona_id': persona_id}, 201
+                return {
+                    'message': 'Persona selected', 
+                    'persona_id': persona_id,
+                    'category': category,
+                    'weight': weight
+                }, 201
             except Exception as e:
                 db.session.rollback()
                 return {'message': f'Error: {str(e)}'}, 500
+    
     class _GetUserPersonas(Resource):
         @token_required()  
         def get(self):
-            """Get current user's personas"""
+            """Get current user's personas (one per category)"""
             current_user = g.current_user  
             if not current_user:
                 return {'message': 'User not found'}, 404
             
             user_personas = UserPersona.query.filter_by(user_id=current_user.id).all()
-            personas_data = [up.read() for up in user_personas]
-            return {'personas': personas_data}, 200
+            
+            # Organize by category
+            personas_by_category = {}
+            for up in user_personas:
+                category = up.persona._category
+                personas_by_category[category] = up.read()
+            
+            return {
+                'personas': personas_by_category,
+                'total_selected': len(user_personas)
+            }, 200
     
     class _DeleteUserPersona(Resource):
         @token_required()  
