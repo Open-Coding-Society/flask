@@ -87,6 +87,9 @@ pip install -r requirements.txt
   # Obtain key, [Google AI Studio](https://aistudio.google.com/api-keys)
   GEMINI_API_KEY=xxxxx
   GEMINI_SERVER=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
+  # Obtain key, [Groq Console](https://console.groq.com/keys)
+  GROQ_API_KEY=xxxxx
+  GROQ_SERVER=https://api.groq.com/openai/v1/chat/completions
   # GitHub Configuation
   GITHUB_TOKEN=ghp_xxx
   GITHUB_TARGET_TYPE=user  # Use 'organization' or 'user'
