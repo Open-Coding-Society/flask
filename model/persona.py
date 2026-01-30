@@ -151,7 +151,107 @@ class UserPersona(db.Model):
         # Weighted combination: 50% social + 30% fantasy complement + 20% achievement
         match_score = (social_normalized * 0.5 + fantasy_complement * 0.3 + achievement_overlap * 0.2) * 100
         return round(match_score, 2)
-
+    
+    @staticmethod
+    def calculate_weighted_team_score(user_personas_list):
+        """
+        Calculate team compatibility score with proper category weighting.
+        
+        Weighting:
+        - Student Archetype: 50% (maximize diversity - different learning styles work better together)
+        - Social Interest: 25% (balance diversity and similarity)
+        - Achievement Oriented: 25% (some alignment helps team motivation)
+        - Fantasy Persona: 0% (display only, no impact on scoring)
+        
+        Args:
+            user_personas_list: List of lists, where each inner list contains UserPersona objects for one user
+            
+        Returns:
+            float: Weighted team compatibility score (0-100)
+        """
+        if not user_personas_list or len(user_personas_list) < 2:
+            return 0.0
+        
+        # Organize personas by category for each user
+        student_personas = []
+        social_personas = []
+        achievement_personas = []
+        
+        for user_personas in user_personas_list:
+            for up in user_personas:
+                category = up.persona._category
+                alias = up.persona._alias
+                
+                if category == 'student':
+                    student_personas.append(alias)
+                elif category == 'social':
+                    social_personas.append(alias)
+                elif category == 'achievement':
+                    achievement_personas.append(alias)
+                # Fantasy personas are ignored (0% weight)
+        
+        # ===== Student Archetype Score (50% weight) =====
+        # MAXIMIZE DIVERSITY - different learning styles complement each other
+        if student_personas:
+            unique_student = len(set(student_personas))
+            total_student = len(student_personas)
+            student_diversity = unique_student / total_student
+            student_score = student_diversity * 100
+        else:
+            student_score = 0
+        
+        # ===== Social Interest Score (25% weight) =====
+        # BALANCE between diversity and similarity
+        if social_personas:
+            from collections import Counter
+            social_counts = Counter(social_personas)
+            unique_social = len(set(social_personas))
+            total_social = len(social_personas)
+            
+            # Ideal: 50-70% diversity (some overlap but not too much)
+            diversity_ratio = unique_social / total_social
+            
+            # Score peaks around 0.6 diversity (some shared interests)
+            if diversity_ratio >= 0.5 and diversity_ratio <= 0.8:
+                social_score = 100  # Perfect balance
+            elif diversity_ratio > 0.8:
+                social_score = 100 - ((diversity_ratio - 0.8) * 100)  # Too diverse
+            else:
+                social_score = diversity_ratio / 0.5 * 100  # Too similar
+        else:
+            social_score = 0
+        
+        # ===== Achievement Oriented Score (25% weight) =====
+        # MODERATE ALIGNMENT - teams work better when achievement styles align somewhat
+        if achievement_personas:
+            from collections import Counter
+            achievement_counts = Counter(achievement_personas)
+            
+            # Check for alignment (having 2+ people with same achievement style is good)
+            max_overlap = max(achievement_counts.values())
+            total_achievement = len(achievement_personas)
+            
+            # Score based on how much alignment exists
+            alignment_ratio = max_overlap / total_achievement
+            
+            # Ideal: 40-70% alignment (some shared goals, not total uniformity)
+            if alignment_ratio >= 0.4 and alignment_ratio <= 0.7:
+                achievement_score = 100
+            elif alignment_ratio > 0.7:
+                achievement_score = 100 - ((alignment_ratio - 0.7) * 100)  # Too uniform
+            else:
+                achievement_score = (alignment_ratio / 0.4) * 100  # Too diverse
+        else:
+            achievement_score = 0
+        
+        # ===== Calculate weighted final score =====
+        weighted_score = (
+            student_score * 0.50 +      # 50% weight
+            social_score * 0.25 +        # 25% weight
+            achievement_score * 0.25     # 25% weight
+        )
+        
+        return round(weighted_score, 2)
 class Persona(db.Model):
     __tablename__ = 'personas'
 
