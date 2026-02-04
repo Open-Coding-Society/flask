@@ -34,6 +34,9 @@ import sys
 # Add the directory containing main.py to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+# Import app BEFORE using app.config
+from main import app, db
+
 # Configuration
 BASE_URL = "https://flask.opencodingsociety.com"
 PROD_AUTH_URL = f"{BASE_URL}/api/authenticate"
@@ -58,44 +61,28 @@ IMPORT_ENDPOINTS = {
 UID = app.config['ADMIN_UID']
 PASSWORD = app.config['ADMIN_PASSWORD']
 
-# Import app config for default data filtering
-try:
-    from main import app
-    
-    # Default data to EXCLUDE from restore (created by initUsers, init_posts, etc.)
-    DEFAULT_DATA = {
-        'users': [
-            app.config.get('ADMIN_UID', 'admin'),
-            app.config.get('DEFAULT_UID', 'user'),
-            'niko',  # Nicholas Tesla test user
-        ],
-        'sections': [
-            'CSA',      # Computer Science A
-            'CSP',      # Computer Science Principles
-            'Robotics', # Engineering Robotics
-            'CSSE',     # Computer Science and Software Engineering
-        ],
-        'topics': [
-            '/lessons/flask-introduction',
-            '/hacks/javascript-basics',
-            '/projects/portfolio-showcase',
-            '/general/daily-standup',
-            '/resources/study-materials',
-        ],
-    }
-except:
-    # Fallback if app import fails
-    DEFAULT_DATA = {
-        'users': ['admin', 'user', 'niko', 'toby', 'hop'],
-        'sections': ['CSA', 'CSP', 'Robotics', 'CSSE'],
-        'topics': [
-            '/lessons/flask-introduction',
-            '/hacks/javascript-basics',
-            '/projects/portfolio-showcase',
-            '/general/daily-standup',
-            '/resources/study-materials',
-        ],
-    }
+# Default data to EXCLUDE from restore (created by initUsers, init_posts, etc.)
+# These are recreated when db.create_all() runs, so we don't want duplicates
+DEFAULT_DATA = {
+    'users': [
+        app.config.get('ADMIN_UID', 'admin'),
+        app.config.get('DEFAULT_UID', 'user'),
+        'niko',  # Nicholas Tesla test user
+    ],
+    'sections': [
+        'CSA',      # Computer Science A
+        'CSP',      # Computer Science Principles
+        'Robotics', # Engineering Robotics
+        'CSSE',     # Computer Science and Software Engineering
+    ],
+    'topics': [
+        '/lessons/flask-introduction',
+        '/hacks/javascript-basics',
+        '/projects/portfolio-showcase',
+        '/general/daily-standup',
+        '/resources/study-materials',
+    ],
+}
 
 
 def authenticate(uid, password):
