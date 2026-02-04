@@ -1,20 +1,54 @@
-
 """
-Gemini API for handling requests to the Gemini language model.
-Supports text analysis, citation checking, and other AI-powered features.
+=============================================================================
+GEMINI AI API - Text Analysis & Citation Checking
+=============================================================================
+Google's Gemini API for AI-powered text analysis, citation checking, and
+general language model tasks.
 
-Example frontend JavaScript code for reference:
-const API_KEY = "your-api-key-here";
-const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
-fetch(ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-        contents: [{
-            parts: [{ text: `Please look at this text for correct academic citations, and recommend APA references for each area of concern: ${text}` }]
-        }]
+SETUP REQUIRED:
+1. Get an API key from: https://aistudio.google.com/app/apikey
+2. Add to your .env file:
+   GEMINI_API_KEY=your_key_here
+   GEMINI_SERVER=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
+
+ENDPOINTS PROVIDED:
+- POST /api/gemini         - Main text analysis (citation checking, custom prompts)
+- GET  /api/gemini/health  - Health check and configuration status
+- POST /api/gemini/debug   - Debug endpoint for troubleshooting API issues
+
+AUTHENTICATION:
+All endpoints require authentication via token (uses @token_required decorator).
+Include your auth token in request headers.
+
+DEFAULT BEHAVIOR:
+- Default prompt performs academic citation analysis (APA format)
+- Custom prompts can be provided via the 'prompt' field
+- 90 second timeout for API requests
+
+USAGE EXAMPLE (JavaScript frontend):
+    fetch('/api/gemini', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer your_token_here'
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+            text: 'Your text to analyze here...',
+            prompt: 'Optional custom prompt (defaults to citation analysis)'
+        })
     })
-});
+
+RESPONSE FORMAT:
+    Success: { "success": true, "text": "generated response", "user": "user_id" }
+    Error:   { "message": "error description", "error_code": 500 }
+
+ERROR CODES:
+- 400: Bad request (missing text field or invalid input)
+- 429: Rate limit exceeded
+- 500: Server error or API configuration issue
+- 503: Gemini API temporarily unavailable
+=============================================================================
 """
 from __init__ import app
 from flask import Blueprint, request, jsonify, current_app, g
@@ -22,14 +56,23 @@ from flask_restful import Api, Resource
 import requests
 from api.authorize import token_required
 
+# =============================================================================
+# BLUEPRINT SETUP
+# =============================================================================
+
 gemini_api = Blueprint('gemini_api', __name__, url_prefix='/api')
 api = Api(gemini_api)
+
+# =============================================================================
+# ENDPOINTS
+# =============================================================================
 
 class GeminiAPI:
     class _Ask(Resource):
         """
-        Gemini API Resource to handle requests to the Gemini language model.
-        Supports various AI-powered text analysis tasks.
+        Main analysis endpoint - POST /api/gemini
+        Handles text analysis with customizable prompts.
+        Default: Academic citation checking (APA format).
         """
         @token_required()
         def post(self):
@@ -161,7 +204,8 @@ class GeminiAPI:
 
     class _Health(Resource):
         """
-        Health check endpoint for Gemini API integration.
+        Health check - GET /api/gemini/health
+        Verifies API configuration and tests connectivity.
         """
         @token_required()
         def get(self):
@@ -278,7 +322,7 @@ class GeminiAPI:
                 debug_info['exception'] = str(e)
                 return debug_info, 500
 
-    # Register endpoints
-    api.add_resource(_Ask, '/gemini')
-    api.add_resource(_Health, '/gemini/health')
-    api.add_resource(_Debug, '/gemini/debug')
+    # Register all endpoints
+    api.add_resource(_Ask, '/gemini')              # Main analysis endpoint
+    api.add_resource(_Health, '/gemini/health')    # Health check
+    api.add_resource(_Debug, '/gemini/debug')      # Debug/troubleshooting
