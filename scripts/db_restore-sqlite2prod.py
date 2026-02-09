@@ -338,7 +338,7 @@ def import_all_data(all_data, cookies):
 
         # For large datasets, use batching to avoid timeout
         # Batch size of 50 matches the pagination size for consistency
-        large_datasets = ['users', 'microblogs', 'posts']
+        large_datasets = ['users', 'microblogs', 'posts', 'user_personas', 'personas']
         batch_size = 50 if data_type in large_datasets else None
 
         if batch_size and len(data_list) > batch_size:
