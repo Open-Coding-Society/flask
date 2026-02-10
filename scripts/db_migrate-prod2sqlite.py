@@ -212,6 +212,11 @@ def extract_all_data(cookies):
 
                             result = response.json()
                             page_records = result.get(data_type, [])
+         
+                            # Safety check: stop if no records returned
+                            if len(page_records) == 0:
+                                break
+         
                             all_records.extend(page_records)
                             success = True
 
