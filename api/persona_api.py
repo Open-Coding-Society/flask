@@ -296,7 +296,7 @@ class PersonaAPI:
     class _UserPersona(Resource):
         @token_required()
         def post(self):
-            """User selects their persona (replaces existing if any)"""
+            """User selects their persona (replaces existing in same category if any)"""
             body = request.get_json()
             persona_id = body.get('persona_id')
             weight = body.get('weight', 1)
@@ -314,6 +314,9 @@ class PersonaAPI:
             if not persona:
                 return {'message': 'Persona not found'}, 404
             
+            # Get the category of the selected persona
+            category = persona.category
+            
             # Check if user already has THIS exact persona
             existing = UserPersona.query.filter_by(
                 user_id=current_user.id,
@@ -321,9 +324,16 @@ class PersonaAPI:
             ).first()
             
             if existing:
-                return {'message': 'Persona already selected'}, 400
+                return {'message': 'Persona already selected'}, 200  # Changed to 200, it's OK
             
-            UserPersona.query.filter_by(user_id=current_user.id).delete()
+            # Delete any existing persona in the SAME CATEGORY (not all personas)
+            # First get all user's personas
+            user_personas = UserPersona.query.filter_by(user_id=current_user.id).all()
+            
+            # Find and delete any in the same category
+            for up in user_personas:
+                if up.persona.category == category:
+                    db.session.delete(up)
             
             # Create new assignment
             user_persona = UserPersona(
@@ -335,22 +345,37 @@ class PersonaAPI:
             try:
                 db.session.add(user_persona)
                 db.session.commit()
-                return {'message': 'Persona selected', 'persona_id': persona_id}, 201
+                return {'message': 'Persona selected', 'persona_id': persona_id, 'category': category}, 201
             except Exception as e:
                 db.session.rollback()
                 return {'message': f'Error: {str(e)}'}, 500
+
     class _GetUserPersonas(Resource):
         @token_required()  
         def get(self):
-            """Get current user's personas"""
+            """Get current user's personas grouped by category"""
             current_user = g.current_user  
             if not current_user:
                 return {'message': 'User not found'}, 404
             
             user_personas = UserPersona.query.filter_by(user_id=current_user.id).all()
-            personas_data = [up.read() for up in user_personas]
-            return {'personas': personas_data}, 200
-    
+            
+            # Group personas by category
+            personas_by_category = {}
+            for up in user_personas:
+                category = up.persona.category
+                personas_by_category[category] = {
+                    'persona_id': up.persona_id,
+                    'alias': up.persona.alias,
+                    'weight': up.weight,
+                    'selected_at': up.selected_at.isoformat() if up.selected_at else None
+                }
+            
+            return {
+                'personas': personas_by_category,
+                'total_selected': len(personas_by_category)
+            }, 200
+
     class _DeleteUserPersona(Resource):
         @token_required()  
         def delete(self, persona_id):
@@ -368,14 +393,17 @@ class PersonaAPI:
             if not user_persona:
                 return {'message': 'Persona not assigned'}, 404
             
+            category = user_persona.persona.category
+            
             try:
                 db.session.delete(user_persona)
                 db.session.commit()
-                return {'message': 'Persona removed'}, 200
+                return {'message': 'Persona removed', 'category': category}, 200
             except Exception as e:
                 db.session.rollback()
                 return {'message': f'Error: {str(e)}'}, 500
-
+            
+            
     api.add_resource(_UserPersona, '/user/persona')
     api.add_resource(_GetUserPersonas, '/user/personas')
     api.add_resource(_DeleteUserPersona, '/user/persona/<int:persona_id>')
