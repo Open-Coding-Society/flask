@@ -33,6 +33,8 @@ cors = CORS(
    origins=[
        'http://localhost:4500',
        'http://127.0.0.1:4500',
+       'http://localhost:4599',
+       'http://127.0.0.1:4599',
        'http://localhost:4600',
        'http://127.0.0.1:4600',
        'http://localhost:4000',
