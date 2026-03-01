@@ -545,10 +545,10 @@ class User(db.Model, UserMixin):
     def read_personas(self):
         """Reads the personas associated with the user."""
         personas = []
-        from model.persona import UserPersona
-        user_personas = UserPersona.query.filter_by(user_id=self.id).all()
-        if user_personas:
-            for user_persona in user_personas:
+        # Use the user_personas_rel backref to avoid N+1 queries
+        # This data is already loaded via lazy='subquery' on the relationship
+        if hasattr(self, 'user_personas_rel') and self.user_personas_rel:
+            for user_persona in self.user_personas_rel:
                 personas.append(user_persona.read())
         return {"personas": personas}
     
