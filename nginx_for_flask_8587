@@ -20,7 +20,7 @@ server {
         proxy_set_header Host $host;
 
         set $cors_origin "";
-        if ($http_origin = "https://pages.opencodingsociety.com") {
+        if ($http_origin ~* "^https://(.*\.)?opencodingsociety\.com$") {
             set $cors_origin $http_origin;
         }
         if ($http_origin = "https://open-coding-society.github.io") {
