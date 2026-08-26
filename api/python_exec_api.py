@@ -1,41 +1,35 @@
-# /api/python_exec_api.py
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request
 from flask_restful import Api, Resource
-import subprocess, tempfile, os
+import requests
 
 python_exec_api = Blueprint('python_exec_api', __name__, url_prefix='/run')
+
 api = Api(python_exec_api)
+
+RUNNER_URL = "http://code_runner:8591/python"
 
 class PythonExec(Resource):
     def post(self):
-        """Executes submitted Python code safely in a short-lived subprocess."""
-        data = request.get_json()
-        code = data.get("code", "")
+        data = request.get_json(silent=True) or {}
 
-        if not code.strip():
-            return {"output": "⚠️ No code provided."}, 400
+        try:
+            response = requests.post(
+                RUNNER_URL,
+                json=data,
+                timeout=10
+            )
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".py") as tmp:
-            tmp.write(code.encode())
-            tmp.flush()
+            return response.json(), response.status_code
 
-            try:
-                result = subprocess.run(
-                    ["python3", tmp.name],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    cwd="/tmp",  # Force working directory to /tmp
-                    env={"HOME": "/tmp", "PATH": "/usr/bin:/usr/local/bin"}  # Restricted environment
-                )
-                output = result.stdout + result.stderr
-            except subprocess.TimeoutExpired:
-                output = "⏱️ Execution timed out (5 s limit)."
-            except Exception as e:
-                output = f"Error running code: {str(e)}"
-            finally:
-                os.unlink(tmp.name)
+        except requests.Timeout:
+            return {
+                "output": "⏱️ Runner timed out."
+            }, 504
 
-        return {"output": output}
+        except requests.RequestException as e:
+            return {
+                "output": f"❌ Could not connect to code runner: {str(e)}"
+            }, 502
+
 
 api.add_resource(PythonExec, "/python")
