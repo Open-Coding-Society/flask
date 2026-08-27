@@ -20,10 +20,12 @@ class PythonExec(Resource):
         is_production = os.environ.get("IS_PRODUCTION", "false").lower() == "true"
 
         if is_production:
+            print("running locally...")
             return _execute_remote(data)
         # might have to update this in future; could be vuln
         # skipping verbose check
         else:
+            print("running remotely...")
             return _execute_local(code)
 
 

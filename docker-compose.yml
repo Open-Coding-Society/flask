@@ -19,6 +19,8 @@ services:
     restart: unless-stopped
 
   code_runner:
-      image: flask_runner
-      build: ./runner
-      restart: unless-stopped
+    image: flask_runner
+    build: ./runner
+    cap_drop:
+      - ALL
+    restart: unless-stopped
