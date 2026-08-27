@@ -43,7 +43,7 @@ def _execute_local(code):
             )
             output = result.stdout + result.stderr
         except subprocess.TimeoutExpired:
-            output = "⏱️ Execution timed out (5 s limit)."
+            output = "Execution timed out (5 s limit)."
         except Exception as e:
             output = f"Error running code: {str(e)}"
         finally:
@@ -62,11 +62,11 @@ def _execute_remote(data):
         return response.json(), response.status_code
 
     except requests.Timeout:
-        return {"output": "⏱️ Runner timed out."}, 504
+        return {"output": "Runner timed out."}, 504
 
     except requests.RequestException as e:
         return {
-            "output": f"❌ Could not connect to code runner: {str(e)}"
+            "output": f"Could not connect to code runner: {str(e)}"
         }, 502
 
 

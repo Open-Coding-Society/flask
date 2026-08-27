@@ -9,7 +9,7 @@ def run_python():
     code = data.get("code", "")
 
     if not code.strip():
-        return {"output": "⚠️ No code provided."}, 400
+        return {"output": "No code provided."}, 400
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".py") as tmp:
         tmp.write(code.encode())
@@ -26,7 +26,7 @@ def run_python():
             )
             output = result.stdout + result.stderr
         except subprocess.TimeoutExpired:
-            output = "⏱️ Execution timed out (5 s limit)."
+            output = "Execution timed out (5 s limit)."
         except Exception as e:
             output = f"Error running code: {str(e)}"
         finally:
