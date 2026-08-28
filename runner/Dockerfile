@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install python deps first for better layer caching
+# Install Python deps first for better layer caching
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
   && pip install --no-cache-dir -r /app/requirements.txt
@@ -12,5 +12,5 @@ COPY . /app
 
 EXPOSE 8591
 
-# Run the websocket service
-CMD ["python", "runner.py"]
+# Run Flask with Gunicorn
+CMD ["gunicorn", "--bind", "0.0.0.0:8591", "--workers", "2", "runner:runner"]
