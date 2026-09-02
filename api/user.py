@@ -1,7 +1,7 @@
 import jwt
 from flask import Blueprint, app, request, jsonify, current_app, Response, g
 from flask_restful import Api, Resource # used for REST API building
-from datetime import datetime
+from datetime import datetime, timedelta
 from __init__ import app, db
 from api.authorize import token_required
 from model.user import User
@@ -392,8 +392,16 @@ class UserAPI:
                 # Check if user is found
                 if user:
                     try:
+                        # exp ties the token's server-enforced lifetime to the cookie's
+                        # client-side max_age (previously the token never expired by JWT
+                        # semantics at all). token_version is checked on every request in
+                        # auth_required -- see model/user.py's token_version column comment.
                         token = jwt.encode(
-                            {"_uid": user._uid},
+                            {
+                                "_uid": user._uid,
+                                "token_version": user.token_version,
+                                "exp": datetime.utcnow() + timedelta(seconds=current_app.config["JWT_TOKEN_MAX_AGE"]),
+                            },
                             current_app.config["SECRET_KEY"],
                             algorithm="HS256"
                         )
