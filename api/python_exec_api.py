@@ -1,4 +1,5 @@
 from flask import Blueprint, Flask, request
+from __init__ import app
 from flask_restful import Api, Resource
 import subprocess, tempfile, os, requests
 
@@ -6,8 +7,9 @@ python_exec_api = Blueprint('python_exec_api', __name__, url_prefix='/run')
 
 api = Api(python_exec_api)
 
-# todo: don't hardcode
-RUNNER_URL = "http://code_runner:8591/python"
+runner_port = app.config['RUNNER_PORT']
+# based on docker configured name
+RUNNER_URL = f'http://code_runner:{runner_port}/python'
 
 class PythonExec(Resource):
     def post(self):
