@@ -1,5 +1,8 @@
+import base64
+import hashlib
 import hmac
 import jwt
+import threading
 from flask import Blueprint, app, request, jsonify, current_app, Response, g
 from flask_restful import Api, Resource # used for REST API building
 from datetime import datetime
@@ -14,6 +17,73 @@ user_api = Blueprint('user_api', __name__,
 
 # API docs https://flask-restful.readthedocs.io/en/latest/api.html
 api = Api(user_api)
+
+# Tokens this process has already spent, so a captured token can't be replayed against
+# Flask again within its own TTL -- Spring enforces single-use on its side too (consumed
+# when the frontend calls /reset/oauth/complete), but that's a separate record Flask has
+# no visibility into, so this endpoint needs its own. Keyed by the full token string;
+# swept lazily since each entry's own expiry means it's safe to forget once that time
+# passes -- nobody can replay an expired token anyway.
+_consumed_reset_tokens = {}
+_consumed_reset_tokens_lock = threading.Lock()
+
+
+def _verify_reset_token(uid, token):
+    """Verifies a password-reset token issued by Spring's ResetCode.java, entirely
+    locally -- no network call back to Spring. Same HMAC-SHA256 scheme on both
+    sides, keyed by the RESET_TOKEN_SECRET both backends are independently
+    configured with: token = base64url(uid) + "." + expiresAt + "." + nonce + "."
+    + signature, where signature = HMAC-SHA256(secret, f"{uid}.{expiresAt}.{nonce}").
+    Signature + expiry only -- callers that need single-use enforcement (this file's
+    reset-password endpoint) must check/record consumption themselves.
+    """
+    if not uid or not token:
+        return False, None
+
+    parts = token.split('.')
+    if len(parts) != 4:
+        return False, None
+    _uid_b64, exp_str, nonce, signature = parts
+
+    try:
+        exp = int(exp_str)
+    except ValueError:
+        return False, None
+    if datetime.utcnow().timestamp() > exp:
+        return False, None
+
+    secret = current_app.config.get('RESET_TOKEN_SECRET')
+    if not secret:
+        return False, None
+
+    payload = f"{uid}.{exp}.{nonce}".encode('utf-8')
+    expected_sig = base64.urlsafe_b64encode(
+        hmac.new(secret.encode('utf-8'), payload, hashlib.sha256).digest()
+    ).decode('utf-8').rstrip('=')
+
+    return hmac.compare_digest(expected_sig, signature), exp
+
+
+def _consume_reset_token(uid, token):
+    """Verifies the token (signature + expiry) and, only if it hasn't been spent
+    against this endpoint before, marks it spent and returns True. Single-use
+    enforcement local to Flask -- see _verify_reset_token's docstring."""
+    valid, exp = _verify_reset_token(uid, token)
+    if not valid:
+        return False
+
+    now = datetime.utcnow().timestamp()
+    with _consumed_reset_tokens_lock:
+        for stored_token, stored_exp in list(_consumed_reset_tokens.items()):
+            if stored_exp <= now:
+                del _consumed_reset_tokens[stored_token]
+
+        if token in _consumed_reset_tokens:
+            return False
+
+        _consumed_reset_tokens[token] = exp
+        return True
+
 
 def _without_password(user_data):
     """Strip the password hash before a user dict goes out over a general-purpose
@@ -735,27 +805,29 @@ class UserAPI:
             except Exception as e:
                 return {'message': f'Error creating guest user: {str(e)}'}, 500
 
-    class _InternalPasswordSync(Resource):
+    class _ResetPasswordVerified(Resource):
         """
-        Server-to-server password sync, called by the Spring backend after a
-        password reset completes there, so the same account's Flask password
-        stays in sync. Not reachable via a browser session -- gated by a shared
-        secret (INTERNAL_SYNC_KEY) instead of user auth.
+        Sets this uid's Flask password using a short-lived, single-use token
+        issued by Spring's POST /mvc/person/reset/oauth/verify. Called directly
+        by the frontend, not by Spring -- Flask verifies the token's HMAC
+        signature and expiry itself (RESET_TOKEN_SECRET, shared with Spring but
+        never sent over the wire between the two backends), so there is no
+        Spring -> Flask network call. Flask is the source of truth for this
+        password write; the frontend syncs Spring's copy separately afterward by
+        calling Spring's /reset/oauth/complete with the same token.
         """
         def post(self):
-            sync_key = current_app.config.get('INTERNAL_SYNC_KEY')
-            provided_key = request.headers.get('X-Internal-Sync-Key')
-            if not sync_key or not provided_key or not hmac.compare_digest(provided_key, sync_key):
-                return {'message': 'Unauthorized'}, 401
-
             body = request.get_json(silent=True) or {}
             uid = body.get('uid')
-            password = body.get('password')
+            reset_token = body.get('resetToken')
+            password = body.get('newPassword')
 
-            if not uid or not password:
-                return {'message': 'uid and password are required'}, 400
+            if not uid or not reset_token or not password:
+                return {'message': 'uid, resetToken, and newPassword are required'}, 400
             if len(password) < 8:
                 return {'message': 'Password must be at least 8 characters'}, 400
+            if not _consume_reset_token(uid, reset_token):
+                return {'message': 'Invalid, expired, or already-used reset token'}, 403
 
             user = User.query.filter_by(_uid=uid).first()
             if user is None:
@@ -763,10 +835,9 @@ class UserAPI:
 
             updated = user.update({'password': password})
             if updated is None:
-                # update() returns None on IntegrityError (already rolled back internally) --
-                # don't report success to Spring when the write didn't actually happen.
-                return {'message': f'Failed to sync password for {uid}'}, 500
-            return {'message': f'Password synced for {uid}'}, 200
+                # update() returns None on IntegrityError (already rolled back internally).
+                return {'message': f'Failed to reset password for {uid}'}, 500
+            return {'message': f'Password reset for {uid}'}, 200
 
     # building RESTapi endpoint
     api.add_resource(_ID, '/id')
@@ -778,7 +849,7 @@ class UserAPI:
     api.add_resource(_GradeData, '/grade_data')
     api.add_resource(_APExam, '/apexam')
     api.add_resource(_School, '/school')
-    api.add_resource(_InternalPasswordSync, '/internal/sync-password')
+    api.add_resource(_ResetPasswordVerified, '/reset-password')
     
     class _Class(Resource):
         """Manage the user's `class` list (e.g. CSSE, CSP, CSA).
