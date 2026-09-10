@@ -71,6 +71,11 @@ app.config['USER_PFP'] = os.environ.get('USER_PFP') or 'default.png'
 # Defaults
 app.config['DEFAULT_PASSWORD'] = os.environ.get('DEFAULT_PASSWORD') or 'password'
 app.config['DEFAULT_PFP'] = os.environ.get('DEFAULT_PFP') or 'default.png'
+# Signing secret for password-reset tokens issued by Spring's ResetCode.java.
+# Must match RESET_TOKEN_SECRET in the spring repo's .env -- Flask verifies these
+# tokens locally (no call back to Spring). No default -- unset means the
+# frontend-driven reset-password endpoint is closed.
+app.config['RESET_TOKEN_SECRET'] = os.environ.get('RESET_TOKEN_SECRET')
 # Convenience user
 app.config['MY_NAME'] = os.environ.get('MY_NAME') or 'convenience'
 app.config['MY_UID'] = os.environ.get('MY_UID') or 'convenience'
