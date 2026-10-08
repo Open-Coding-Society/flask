@@ -393,6 +393,8 @@ def load_users(users_data):
                 school=user_data.get('school'),
                 classes=user_data.get('class') or user_data.get('_class'),
                 game_profile=user_data.get('game_profile') or user_data.get('gameProfile'),
+                active=user_data.get('active', True),
+                last_verified=(datetime.fromisoformat(user_data['last_verified']) if user_data.get('last_verified') else User.MIGRATION_LAST_VERIFIED),
             )
             if user_data.get('email'):
                 user.email = user_data['email']

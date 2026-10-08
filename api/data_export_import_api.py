@@ -4,6 +4,7 @@ Provides comprehensive endpoints for exporting and importing ALL database data.
 Used by db_migrate and db_restore scripts for database migration.
 """
 
+from datetime import datetime
 from flask import Blueprint, request, jsonify, g
 from flask_restful import Api, Resource
 from api.authorize import token_required
@@ -425,7 +426,9 @@ class ImportAllData(Resource):
                     ap_exam=user_data.get('ap_exam') or user_data.get('apExam'),
                     school=user_data.get('school'),
                     classes=user_data.get('class') or user_data.get('_class'),
-                    game_profile=user_data.get('game_profile') or user_data.get('gameProfile')
+                    game_profile=user_data.get('game_profile') or user_data.get('gameProfile'),
+                    active=user_data.get('active', True),
+                    last_verified=(datetime.fromisoformat(user_data['last_verified']) if user_data.get('last_verified') else User.MIGRATION_LAST_VERIFIED)
                 )
 
                 # Set email via property (not a constructor param)

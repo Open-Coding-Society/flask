@@ -323,6 +323,9 @@ class User(db.Model, UserMixin):
         return self._role == "Teacher"
 
     VERIFICATION_INTERVAL = timedelta(days=365)
+    # Accounts that existed before activation was introduced are treated as verified on this
+    # date, so they stay active and fall due for re-verification in January.
+    MIGRATION_LAST_VERIFIED = datetime(2026, 1, 30)
 
     @property
     def verification_state(self):

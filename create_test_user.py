@@ -27,7 +27,8 @@ def create_test_user():
             name="Test User",
             uid="testuser",
             password="123456",  # Simple password for testing
-            role="Student"
+            role="Student",
+            active=True
         )
         
         # Save to database
