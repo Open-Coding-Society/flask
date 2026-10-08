@@ -129,6 +129,18 @@ def main():
         with app.test_client() as c:
             login(c, "zz_student")
             check("active account passes", c.get("/api/id").status_code == 200)
+        with app.test_client() as c:
+            r = c.post("/login", data={"username": "zz_mentor", "password": PASSWORD})
+            check("form login tells an inactive account why", "Account pending verification." in r.get_data(as_text=True))
+            check("form login grants an inactive account no session",
+                  c.get("/users/table2", follow_redirects=False).status_code == 302)
+            r = c.post("/login", data={"username": "zz_mentor", "password": "wrong-password"})
+            check("form login keeps the generic message for a bad password",
+                  "Invalid username or password." in r.get_data(as_text=True))
+        with app.test_client() as c:
+            c.post("/login", data={"username": "zz_student", "password": PASSWORD})
+            check("form login still works for an active account",
+                  c.get("/users/table2", follow_redirects=False).status_code == 200)
 
         # verify (1a) and admin-create (1b)
         with app.test_client() as c:
