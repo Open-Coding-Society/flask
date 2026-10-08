@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from __init__ import app, db
 from api.authorize import token_required
 from model.user import User
+from model.google_token import verified_student_email
 from model.github import GitHubUser
 import os
 
@@ -181,14 +182,21 @@ class UserAPI:
                 return {'message': f'User ID {uid} not a valid GitHub account' }, 404
             
             ''' User object creation '''
+            # Mentors are always created inactive and need a Teacher/Admin to verify them.
+            # Anyone else is activated only if Google vouches for a student email; the email
+            # the client claims is never trusted on its own.
+            is_mentor = (body.get('accountType') or '').lower() == 'mentor'
+            role = 'Mentor' if is_mentor else 'User'
+            verified_email = None if is_mentor else verified_student_email(body.get('idToken'))
+
             #1: Setup minimal User object using __init__ method
             password = body.get('password')
             if password is not None:
                 if len(password) < 8 and not password.startswith("pbkdf2:sha256:"):
                     return {'message': 'Password must be at least 8 characters'}, 400
-                user_obj = User(name=name, uid=uid, password=password)
+                user_obj = User(name=name, uid=uid, password=password, role=role)
             else:
-                user_obj = User(name=name, uid=uid)
+                user_obj = User(name=name, uid=uid, role=role)
             
             # Handle additional fields that frontend sends
             # Create a cleaned body with only the fields User model expects
@@ -196,7 +204,7 @@ class UserAPI:
                 'name': name,
                 'uid': uid,
                 'password': password,
-                'email': body.get('email'),
+                'email': verified_email or body.get('email'),
             }
             
             # Add optional fields if they exist
@@ -232,6 +240,9 @@ class UserAPI:
                         return jsonify(_without_password(db_user.read()))  # Return the user anyway
                     else:
                         return {'message': f'Processed {name}, either a format error or User ID {uid} is duplicate'}, 400
+
+                if verified_email:
+                    user.activate()
 
                 #print(f"Successfully created user: {user.uid}")
                 # return response, the created user details as a JSON object
