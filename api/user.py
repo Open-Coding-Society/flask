@@ -857,6 +857,34 @@ class UserAPI:
                 return {'message': f'Failed to reset password for {uid}'}, 500
             return {'message': f'Password reset for {uid}'}, 200
 
+    class _VerifyAccount(Resource):
+        """Teacher/Admin verifies an account: marks it active and records last_verified.
+        Also the re-verification step when verification is due."""
+        @token_required(["Teacher", "Admin"])
+        def post(self, uid):
+            target = User.query.filter_by(_uid=uid).first()
+            if target is None:
+                return {'message': f'User {uid} not found'}, 404
+            return jsonify(_without_password(target.activate().read()))
+
+    class _AdminCreate(Resource):
+        """Teacher/Admin creates a Student or Mentor account directly. The account
+        starts inactive and follows the same verification step as a self-created one."""
+        @token_required(["Teacher", "Admin"])
+        def post(self):
+            body = request.get_json(silent=True) or {}
+            role = {'student': 'User', 'mentor': 'Mentor'}.get((body.get('accountType') or '').lower())
+            name, uid, password = body.get('name'), body.get('uid'), body.get('password')
+            if role is None:
+                return {'message': "accountType must be 'student' or 'mentor'"}, 400
+            if not name or not uid or not password or len(password) < 8:
+                return {'message': 'name, uid and a password of at least 8 characters are required'}, 400
+            user = User(name=name, uid=uid, password=password, role=role).create(
+                {'email': body['email']} if body.get('email') else None)
+            if not user:
+                return {'message': f'User ID {uid} is a duplicate or invalid'}, 400
+            return jsonify(_without_password(user.read()))
+
     # building RESTapi endpoint
     api.add_resource(_ID, '/id')
     api.add_resource(_BULK, '/users')
@@ -868,6 +896,8 @@ class UserAPI:
     api.add_resource(_APExam, '/apexam')
     api.add_resource(_School, '/school')
     api.add_resource(_ResetPasswordVerified, '/reset-password')
+    api.add_resource(_VerifyAccount, '/user/<string:uid>/verify')
+    api.add_resource(_AdminCreate, '/user/admin-create')
     
     class _Class(Resource):
         """Manage the user's `class` list (e.g. CSSE, CSP, CSA).
