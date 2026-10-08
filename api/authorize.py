@@ -4,7 +4,7 @@ from functools import wraps
 import jwt
 from model.user import User
 
-def auth_required(roles=None):
+def auth_required(roles=None, allow_inactive=False):
     '''
     Hybrid authentication decorator supporting both session and JWT token authentication.
     
@@ -104,7 +104,16 @@ def auth_required(roles=None):
                         "error": str(e)
                     }, 500
             
-            # At this point, user is authenticated via either session or JWT
+            # At this point, user is authenticated via either session or JWT.
+            # An inactive account can still log in (to see why it is pending) and log out,
+            # but is refused everywhere else until a Teacher/Admin activates it.
+            if not user.active and not allow_inactive:
+                return {
+                    "message": "Account pending verification.",
+                    "data": None,
+                    "error": "Forbidden"
+                }, 403
+
             # Now check role requirements if specified
             if roles:
                 # Normalize roles to list for consistent checking
@@ -132,9 +141,9 @@ def auth_required(roles=None):
 
 
 # Alias for backward compatibility with existing code using token_required
-def token_required(roles=None):
+def token_required(roles=None, allow_inactive=False):
     '''
     Backward compatibility alias for auth_required.
     Existing code using @token_required will continue to work.
     '''
-    return auth_required(roles)
+    return auth_required(roles, allow_inactive)

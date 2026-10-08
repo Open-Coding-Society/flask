@@ -505,6 +505,8 @@ class UserAPI:
                                 "uid": user._uid,
                                 "name": user.name,
                                 "role": user.role,
+                                "active": user.active,
+                                "verification_state": user.verification_state,
                                 "class": user._class if getattr(user, '_class', None) is not None else []
                             }
                         }
@@ -551,7 +553,7 @@ class UserAPI:
                                 "data": None
                             }, 500
                  
-        @token_required()
+        @token_required(allow_inactive=True)
         def delete(self):
             ''' Invalidate the current user's token by setting its expiry to 0 '''
             current_user = g.current_user
