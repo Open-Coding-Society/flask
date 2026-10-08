@@ -189,6 +189,28 @@ def main():
             for path in ("/api/user/zz_mentor/verify", "/api/user/admin-create"):
                 check(f"non-staff refused on {path}", c.post(path, json={}).status_code == 403)
 
+    # backup restore keeps the activation fields; an older backup counts as pre-activation accounts
+    with patch("api.user.GitHubUser", FakeGitHub):
+        with app.test_client() as c:
+            login(c, "zz_admin")
+            backup = [
+                dict(name="Old Backup", uid="zz_old", password=PASSWORD, role="User"),
+                dict(name="Inactive Backup", uid="zz_inact", password=PASSWORD, role="Mentor", active=False,
+                     last_verified=None),
+                dict(name="Verified Backup", uid="zz_ver", password=PASSWORD, role="User", active=True,
+                     last_verified="2026-03-15T10:30:00"),
+            ]
+            r = c.post("/api/export/import/users", json={"users": backup})
+            result = (r.get_json() or {}).get("users", {})
+            check("restore imports every account without errors (it returns 200 even when users fail)",
+                  r.status_code == 200 and result.get("failed") == 0 and result.get("imported") == 3, str(result))
+    old_acct, inact, ver = get("zz_old"), get("zz_inact"), get("zz_ver")
+    check("a backup with no activation fields restores active, verified 2026-01-30",
+          old_acct and old_acct["active"] and old_acct["last_verified"] == datetime(2026, 1, 30), str(old_acct))
+    check("a backup's inactive account stays inactive", inact and inact["active"] is False, str(inact))
+    check("a backup's last_verified is preserved",
+          ver and ver["active"] and ver["last_verified"] == datetime(2026, 3, 15, 10, 30), str(ver))
+
     # update() cannot self-activate
     with app.app_context():
         u = User.query.filter_by(_uid="zz_noclient").first()
