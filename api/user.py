@@ -203,7 +203,7 @@ class UserAPI:
                 'name': name,
                 'uid': uid,
                 'password': password,
-                'email': verified_email or body.get('email'),
+                'email': body.get('email'),
             }
             
             # Add optional fields if they exist

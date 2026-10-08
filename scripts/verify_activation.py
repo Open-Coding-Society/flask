@@ -87,15 +87,16 @@ def main():
         with app.app_context():
             u = User.query.filter_by(_uid=uid).first()
             return None if u is None else dict(role=u.role, active=u.active, state=u.verification_state,
-                                               last_verified=u.last_verified)
+                                               last_verified=u.last_verified, email=u.email)
 
     def login(c, uid):
         r = c.post("/api/authenticate", json={"uid": uid, "password": PASSWORD})
         assert r.status_code == 200, (uid, r.status_code)
 
     def signup(c, uid, **extra):
-        return c.post("/api/user", json=dict(name=f"Name {uid}", uid=uid, password=PASSWORD,
-                                             email=f"{uid}@stu.powayusd.com", **extra))
+        body = dict(name=f"Name {uid}", uid=uid, password=PASSWORD, email=f"{uid}@stu.powayusd.com")
+        body.update(extra)
+        return c.post("/api/user", json=body)
 
     with patch("api.user.GitHubUser", FakeGitHub), patch("model.google_token.requests.get", fake_tokeninfo):
         # signup
@@ -109,6 +110,9 @@ def main():
             g = get("zz_good")
             check("student with a verified token is active, verified now",
                   g["active"] and g["state"] == "active_verified" and g["last_verified"], str(g))
+            signup(c, "zz_personal", accountType="student", idToken=GOOD, email="personal@example.com")
+            check("a verified student keeps the personal email they entered",
+                  get("zz_personal")["email"] == "personal@example.com", get("zz_personal")["email"])
             for label, tok in (("no token", None), ("wrong audience", "wrong-aud"), ("wrong issuer", "wrong-iss"),
                                ("unverified email", "unverified"), ("non-student email", "not-student"),
                                ("garbage token", "garbage")):
