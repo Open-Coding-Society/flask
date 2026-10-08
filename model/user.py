@@ -1,7 +1,7 @@
 """ database dependencies to support sqliteDB examples """
 from flask import current_app
 from flask_login import UserMixin
-from datetime import date
+from datetime import date, datetime, timedelta
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
@@ -163,6 +163,11 @@ class User(db.Model, UserMixin):
     # a stolen JWT or session cookie stops working the moment this account's password is
     # reset, instead of staying valid for the rest of its lifetime.
     token_version = db.Column(db.Integer, default=0, nullable=False)
+    # Account lifecycle, independent of role. New accounts start inactive: activation is an
+    # explicit authorization step (a verified student signup, or a Teacher/Admin verifying the
+    # account), never a side effect of how the account was created. See verification_state.
+    active = db.Column(db.Boolean, default=False, nullable=False)
+    last_verified = db.Column(db.DateTime, nullable=True)
 
     # Define many-to-many relationship with Section model through UserSection table
     # Overlaps setting silences SQLAlchemy warnings about multiple relationship paths
@@ -176,7 +181,7 @@ class User(db.Model, UserMixin):
     personas = db.relationship('Persona', secondary='user_personas', lazy='subquery',
                                overlaps="user_personas_rel,persona,users")
     
-    def __init__(self, name, uid, password=app.config["DEFAULT_PASSWORD"], kasm_server_needed=False, role="User", pfp='', grade_data=None, ap_exam=None, school="Unknown", sid=None, classes=None, game_profile=None):
+    def __init__(self, name, uid, password=app.config["DEFAULT_PASSWORD"], kasm_server_needed=False, role="User", pfp='', grade_data=None, ap_exam=None, school="Unknown", sid=None, classes=None, game_profile=None, active=False, last_verified=None):
         self._name = name
         self._uid = uid
         self._email = "?"
@@ -192,6 +197,8 @@ class User(db.Model, UserMixin):
         self._class = classes if classes is not None else []
         self._school = school
         self._game_profile = game_profile if game_profile else None
+        self.active = active
+        self.last_verified = last_verified
 
     # UserMixin/Flask-Login requires a get_id method to return the id as a string.
     # Composite id (id:token_version) so load_user (main.py) can reject a session cookie
@@ -314,6 +321,30 @@ class User(db.Model, UserMixin):
 
     def is_teacher(self):
         return self._role == "Teacher"
+
+    VERIFICATION_INTERVAL = timedelta(days=365)
+
+    @property
+    def verification_state(self):
+        if not self.active:
+            return "inactive"
+        if self.last_verified is None or datetime.utcnow() - self.last_verified >= self.VERIFICATION_INTERVAL:
+            return "active_verification_required"
+        return "active_verified"
+
+    def activate(self):
+        """Activate and stamp last_verified. Only trusted flows call this: a verified student
+        signup, or a Teacher/Admin verifying the account (also used for re-verification)."""
+        self.active = True
+        self.last_verified = datetime.utcnow()
+        db.session.commit()
+        return self
+
+    def deactivate(self):
+        """Flag only; the account and its data are preserved."""
+        self.active = False
+        db.session.commit()
+        return self
     
     # getter method for profile picture
     @property
@@ -480,6 +511,9 @@ class User(db.Model, UserMixin):
             "password": self._password,  # Only for internal use, not for API
             "school": self.school,
             "game_profile": self.game_profile,
+            "active": self.active,
+            "last_verified": self.last_verified.isoformat() if self.last_verified else None,
+            "verification_state": self.verification_state,
         }
         sections = self.read_sections()
         data.update(sections)
@@ -793,6 +827,8 @@ def initUsers():
         users = [u1, u2, u3, u4]
         
         for user in users:
+            user.active = True
+            user.last_verified = datetime.utcnow()
             try:
                 user.create()
             except IntegrityError:
