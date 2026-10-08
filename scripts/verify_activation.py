@@ -150,6 +150,16 @@ def main():
             check("form login still works for an active account",
                   c.get("/users/table2", follow_redirects=False).status_code == 200)
 
+        # guests: active but unverified, so the guest feature keeps working
+        with app.test_client() as c:
+            r = c.post("/api/user/guest", json={"uid": "zz_guest", "password": PASSWORD})
+            gst = get("zz_guest")
+            check("a guest is created active but unverified",
+                  r.status_code == 200 and gst["active"] is True and gst["last_verified"] is None
+                  and gst["state"] == "active_verification_required", f"{r.status_code} {gst}")
+            login(c, "zz_guest")
+            check("an active guest passes a protected endpoint", c.get("/api/id").status_code == 200)
+
         # verify (1a) and admin-create (1b)
         with app.test_client() as c:
             login(c, "zz_teacher")

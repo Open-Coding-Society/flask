@@ -808,6 +808,9 @@ class UserAPI:
             # Create the guest user (skip GitHub validation)
             try:
                 user = user_obj.create(cleaned_body)
+                if user:
+                    user.active = True  # guests are active but unverified (last_verified stays empty)
+                    db.session.commit()
 
                 if not user:
                     # Check if user was actually created in database
