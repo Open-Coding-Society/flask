@@ -164,6 +164,12 @@ class User(db.Model, UserMixin):
     # reset, instead of staying valid for the rest of its lifetime.
     token_version = db.Column(db.Integer, default=0, nullable=False)
     # Account lifecycle. New accounts are inactive until explicitly verified.
+    # An existing database needs this once, BEFORE this code is deployed (db.create_all()
+    # does not add columns to an existing table). The UPDATE keeps every existing account
+    # active, and due for re-verification in January:
+    #   ALTER TABLE users ADD COLUMN active BOOLEAN NOT NULL DEFAULT 0;
+    #   ALTER TABLE users ADD COLUMN last_verified DATETIME NULL;
+    #   UPDATE users SET active = 1, last_verified = '2026-01-30 00:00:00';
     active = db.Column(db.Boolean, default=False, nullable=False)
     last_verified = db.Column(db.DateTime, nullable=True)
 
