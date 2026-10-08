@@ -96,7 +96,7 @@ def _without_password(user_data):
 
 class UserAPI:
     class _ID(Resource):  # Individual identification API operation
-        @token_required()
+        @token_required(allow_inactive=True)  # lets a pending user's page read its own state
         def get(self):
             ''' Retrieve the current user from the token_required authentication check '''
             current_user = g.current_user

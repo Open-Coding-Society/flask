@@ -127,9 +127,13 @@ def main():
         # inactive means inactive
         with app.test_client() as c:
             login(c, "zz_mentor")
-            r = c.get("/api/id")
+            r = c.get("/api/user")
             check("inactive account is refused on a protected endpoint",
                   r.status_code == 403 and "pending verification" in r.get_data(as_text=True))
+            r = c.get("/api/id")
+            check("but can read its own state from /api/id, so the page can explain",
+                  r.status_code == 200 and r.get_json().get("verification_state") == "inactive"
+                  and r.get_json().get("active") is False, str(r.status_code))
         with app.test_client() as c:
             login(c, "zz_student")
             check("active account passes", c.get("/api/id").status_code == 200)
