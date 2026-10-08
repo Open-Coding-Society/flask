@@ -860,6 +860,64 @@ class UserAPI:
                 return {'message': f'Failed to reset password for {uid}'}, 500
             return {'message': f'Password reset for {uid}'}, 200
 
+    # Roles a Teacher may manage. Only an Admin may touch Teacher or Admin accounts, so a
+    # Teacher cannot deactivate or verify their way into controlling a higher role.
+    _TEACHER_MANAGEABLE_ROLES = ("User", "Mentor")
+
+    @staticmethod
+    def _can_manage(actor, target):
+        return actor.role == "Admin" or target.role in UserAPI._TEACHER_MANAGEABLE_ROLES
+
+    class _VerifyAccount(Resource):
+        """Teacher/Admin verifies an account: activates it and stamps last_verified.
+        Also the re-verification step when verification is due."""
+        @token_required(["Teacher", "Admin"])
+        def post(self, uid):
+            target = User.query.filter_by(_uid=uid).first()
+            if target is None:
+                return {'message': f'User {uid} not found'}, 404
+            if not UserAPI._can_manage(g.current_user, target):
+                return {'message': 'Only an Admin can manage this account'}, 403
+            return jsonify(_without_password(target.activate().read()))
+
+    class _DeactivateAccount(Resource):
+        """Teacher/Admin deactivates an account. The account and its data are preserved."""
+        @token_required(["Teacher", "Admin"])
+        def post(self, uid):
+            target = User.query.filter_by(_uid=uid).first()
+            if target is None:
+                return {'message': f'User {uid} not found'}, 404
+            if not UserAPI._can_manage(g.current_user, target):
+                return {'message': 'Only an Admin can manage this account'}, 403
+            return jsonify(_without_password(target.deactivate().read()))
+
+    class _AdminCreate(Resource):
+        """Teacher/Admin creates a Student or Mentor account that cannot self-verify.
+        The account starts inactive and follows the normal verification step."""
+        @token_required(["Teacher", "Admin"])
+        def post(self):
+            body = request.get_json(silent=True) or {}
+            roles = {'student': 'User', 'mentor': 'Mentor'}
+            role = roles.get((body.get('accountType') or '').lower())
+            if role is None:
+                return {'message': "accountType must be 'student' or 'mentor'"}, 400
+            name, uid, password = body.get('name'), body.get('uid'), body.get('password')
+            if not name or len(name) < 2:
+                return {'message': 'Name is missing, or is less than 2 characters'}, 400
+            if not uid or len(uid) < 2:
+                return {'message': 'User ID is missing, or is less than 2 characters'}, 400
+            if not password or len(password) < 8:
+                return {'message': 'Password must be at least 8 characters'}, 400
+            _, status = GitHubUser().get(uid)
+            if status != 200:
+                return {'message': f'User ID {uid} not a valid GitHub account'}, 404
+
+            user = User(name=name, uid=uid, password=password, role=role).create(
+                {'email': body['email']} if body.get('email') else None)
+            if not user:
+                return {'message': f'User ID {uid} is a duplicate or invalid'}, 400
+            return jsonify(_without_password(user.read()))
+
     # building RESTapi endpoint
     api.add_resource(_ID, '/id')
     api.add_resource(_BULK, '/users')
@@ -871,6 +929,9 @@ class UserAPI:
     api.add_resource(_APExam, '/apexam')
     api.add_resource(_School, '/school')
     api.add_resource(_ResetPasswordVerified, '/reset-password')
+    api.add_resource(_VerifyAccount, '/user/<string:uid>/verify')
+    api.add_resource(_DeactivateAccount, '/user/<string:uid>/deactivate')
+    api.add_resource(_AdminCreate, '/user/admin-create')
     
     class _Class(Resource):
         """Manage the user's `class` list (e.g. CSSE, CSP, CSA).
