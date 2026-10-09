@@ -192,7 +192,7 @@ def main():
                   and d["last_verified"] == before, str(d))
             with app.test_client() as c2:
                 login(c2, "zz_good")
-                check("a deactivated account is refused again", c2.get("/api/id").status_code == 403)
+                check("a deactivated account is refused again", c2.get("/api/user").status_code == 403)
             check("deactivating your own account is refused",
                   c.post("/api/user/zz_admin/deactivate").status_code == 400 and get("zz_admin")["active"])
             check("deactivating an unknown uid is 404", c.post("/api/user/zz_nobody/deactivate").status_code == 404)
