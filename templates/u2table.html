@@ -62,7 +62,7 @@
                 <td>
                     <button class="btn btn-primary edit-btn" data-id="{{ user.id }}">Edit</button>
                     {% if current_user.role == 'Admin' %}
-                    {% if user.verification_state != 'active_verified' %}
+                    {% if user.role != 'User' and user.verification_state != 'active_verified' %}
                     <button class="btn btn-success status-btn" data-uid="{{ user.uid }}" data-action="verify">{{ 'Activate' if not user.active else 'Verify' }}</button>
                     {% endif %}
                     {% if user.active and user.id != current_user.id %}
