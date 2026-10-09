@@ -171,19 +171,27 @@ def main():
                 login(c2, "zz_mentor")
                 check("a verified mentor now passes", c2.get("/api/id").status_code == 200)
             check("verifying an unknown uid is 404", c.post("/api/user/zz_nobody/verify").status_code == 404)
-            for kind, role in (("mentor", "Mentor"), ("student", "User")):
-                r = c.post("/api/user/admin-create", json=dict(name="Staff Made", uid=f"zz_made_{kind}",
-                                                               password=PASSWORD, accountType=kind))
-                u = get(f"zz_made_{kind}")
-                check(f"staff-created {kind} starts inactive", r.status_code == 200 and u["role"] == role
-                      and u["active"] is False, f"{r.status_code} {u}")
+            r = c.post("/api/user/admin-create", json=dict(name="Staff Made", uid="zz_made_mentor",
+                                                           password=PASSWORD, accountType="mentor"))
+            u = get("zz_made_mentor")
+            check("staff-created mentor starts inactive", r.status_code == 200 and u["role"] == "Mentor"
+                  and u["active"] is False, f"{r.status_code} {u}")
+            r = c.post("/api/user/admin-create", json=dict(name="Staff Made", uid="zz_made_student",
+                                                           password=PASSWORD, accountType="student"))
+            check("admin-create does not create students", r.status_code == 400 and get("zz_made_student") is None)
+            before = get("zz_no_token")
+            r = c.post("/api/user/zz_no_token/verify")
+            check("a Teacher cannot verify a student; they use Google sign-in",
+                  r.status_code == 400 and get("zz_no_token")["active"] == before["active"] is False,
+                  f"{r.status_code} {get('zz_no_token')}")
             for bad in ("teacher", "admin", ""):
                 r = c.post("/api/user/admin-create", json=dict(name="Bad Role", uid="zz_bad_" + (bad or "x"),
                                                                password=PASSWORD, accountType=bad))
                 check(f"admin-create refuses accountType '{bad}'", r.status_code == 400)
         with app.test_client() as c:
             login(c, "zz_admin")
-            check("an admin can verify too", c.post("/api/user/zz_good/verify").status_code == 200)
+            check("an admin can verify a mentor too", c.post("/api/user/zz_mentor_tok/verify").status_code == 200
+                  and get("zz_mentor_tok")["active"])
             before = get("zz_good")["last_verified"]
             r = c.post("/api/user/zz_good/deactivate")
             d = get("zz_good")
