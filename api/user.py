@@ -859,24 +859,27 @@ class UserAPI:
 
     class _VerifyAccount(Resource):
         """Teacher/Admin verifies an account: marks it active and records last_verified.
-        Also the re-verification step when verification is due."""
+        Students are not verified here: they obtain access through Google OAuth."""
         @token_required(["Teacher", "Admin"])
         def post(self, uid):
             target = User.query.filter_by(_uid=uid).first()
             if target is None:
                 return {'message': f'User {uid} not found'}, 404
+            if target.role == 'User':
+                return {'message': 'Student accounts are verified through Google sign-in, not by a Teacher or Admin'}, 400
             return jsonify(_without_password(target.activate().read()))
 
     class _AdminCreate(Resource):
-        """Teacher/Admin creates a Student or Mentor account directly. The account
-        starts inactive and follows the same verification step as a self-created one."""
+        """Teacher/Admin creates a Mentor account directly. The account starts inactive
+        and follows the same verification step as a self-created one. Students are not
+        created here: they obtain access through Google OAuth."""
         @token_required(["Teacher", "Admin"])
         def post(self):
             body = request.get_json(silent=True) or {}
-            role = {'student': 'User', 'mentor': 'Mentor'}.get((body.get('accountType') or '').lower())
+            role = {'mentor': 'Mentor'}.get((body.get('accountType') or '').lower())
             name, uid, password = body.get('name'), body.get('uid'), body.get('password')
             if role is None:
-                return {'message': "accountType must be 'student' or 'mentor'"}, 400
+                return {'message': "accountType must be 'mentor'"}, 400
             if not name or not uid or not password or len(password) < 8:
                 return {'message': 'name, uid and a password of at least 8 characters are required'}, 400
             user = User(name=name, uid=uid, password=password, role=role).create(
