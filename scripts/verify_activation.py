@@ -184,9 +184,21 @@ def main():
         with app.test_client() as c:
             login(c, "zz_admin")
             check("an admin can verify too", c.post("/api/user/zz_good/verify").status_code == 200)
+            before = get("zz_good")["last_verified"]
+            r = c.post("/api/user/zz_good/deactivate")
+            d = get("zz_good")
+            check("deactivate makes the account inactive and keeps last_verified",
+                  r.status_code == 200 and d["active"] is False and d["state"] == "inactive"
+                  and d["last_verified"] == before, str(d))
+            with app.test_client() as c2:
+                login(c2, "zz_good")
+                check("a deactivated account is refused again", c2.get("/api/id").status_code == 403)
+            check("deactivating your own account is refused",
+                  c.post("/api/user/zz_admin/deactivate").status_code == 400 and get("zz_admin")["active"])
+            check("deactivating an unknown uid is 404", c.post("/api/user/zz_nobody/deactivate").status_code == 404)
         with app.test_client() as c:
             login(c, "zz_student")
-            for path in ("/api/user/zz_mentor/verify", "/api/user/admin-create"):
+            for path in ("/api/user/zz_mentor/verify", "/api/user/zz_mentor/deactivate", "/api/user/admin-create"):
                 check(f"non-staff refused on {path}", c.post(path, json={}).status_code == 403)
 
     # backup restore keeps the activation fields; an older backup counts as pre-activation accounts

@@ -870,6 +870,18 @@ class UserAPI:
                 return {'message': f'User {uid} not found'}, 404
             return jsonify(_without_password(target.activate().read()))
 
+    class _DeactivateAccount(Resource):
+        """Teacher/Admin marks an account inactive. Data is kept; a caller cannot
+        deactivate their own account."""
+        @token_required(["Teacher", "Admin"])
+        def post(self, uid):
+            target = User.query.filter_by(_uid=uid).first()
+            if target is None:
+                return {'message': f'User {uid} not found'}, 404
+            if target.id == g.current_user.id:
+                return {'message': 'You cannot deactivate your own account'}, 400
+            return jsonify(_without_password(target.deactivate().read()))
+
     class _AdminCreate(Resource):
         """Teacher/Admin creates a Student or Mentor account directly. The account
         starts inactive and follows the same verification step as a self-created one."""
@@ -900,6 +912,7 @@ class UserAPI:
     api.add_resource(_School, '/school')
     api.add_resource(_ResetPasswordVerified, '/reset-password')
     api.add_resource(_VerifyAccount, '/user/<string:uid>/verify')
+    api.add_resource(_DeactivateAccount, '/user/<string:uid>/deactivate')
     api.add_resource(_AdminCreate, '/user/admin-create')
     
     class _Class(Resource):

@@ -338,7 +338,13 @@ class User(db.Model, UserMixin):
         self.last_verified = datetime.utcnow()
         db.session.commit()
         return self
-    
+
+    def deactivate(self):
+        """Mark the account inactive. Data and last_verified are kept."""
+        self.active = False
+        db.session.commit()
+        return self
+
     # getter method for profile picture
     @property
     def pfp(self):
