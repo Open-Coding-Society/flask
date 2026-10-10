@@ -7,7 +7,7 @@ real dev DB before and after to prove it was never touched.
 Usage:  python scripts/verify_activation.py        (from the flask repo root)
 Exit:   0 all checks passed, 1 otherwise.
 """
-import hashlib, os, shutil, sys, tempfile
+import copy, hashlib, os, shutil, sys, tempfile
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -53,7 +53,8 @@ def fake_tokeninfo(url, params=None, timeout=None):
               "wrong-aud": {**good, "aud": "other"},
               "wrong-iss": {**good, "iss": "https://evil.example"},
               "unverified": {**good, "email_verified": "false"},
-              "not-student": {**good, "email": "someone@gmail.com"}}.get((params or {}).get("id_token"))
+              "not-student": {**good, "email": "someone@gmail.com"},
+              "other-domain": {**good, "email": "kid@school.example"}}.get((params or {}).get("id_token"))
     return Resp(200, claims) if claims else Resp(400, {})
 
 
@@ -127,9 +128,13 @@ def main():
         # inactive means inactive
         with app.test_client() as c:
             login(c, "zz_mentor")
-            r = c.get("/api/id")
+            r = c.get("/api/user")
             check("inactive account is refused on a protected endpoint",
                   r.status_code == 403 and "pending verification" in r.get_data(as_text=True))
+            r = c.get("/api/id")
+            check("but can read its own state from /api/id, so the page can explain",
+                  r.status_code == 200 and r.get_json().get("verification_state") == "inactive"
+                  and r.get_json().get("active") is False, str(r.status_code))
         with app.test_client() as c:
             login(c, "zz_student")
             check("active account passes", c.get("/api/id").status_code == 200)
@@ -145,6 +150,16 @@ def main():
             c.post("/login", data={"username": "zz_student", "password": PASSWORD})
             check("form login still works for an active account",
                   c.get("/users/table2", follow_redirects=False).status_code == 200)
+
+        # guests: active but unverified, so the guest feature keeps working
+        with app.test_client() as c:
+            r = c.post("/api/user/guest", json={"uid": "zz_guest", "password": PASSWORD})
+            gst = get("zz_guest")
+            check("a guest is created active but unverified",
+                  r.status_code == 200 and gst["active"] is True and gst["last_verified"] is None
+                  and gst["state"] == "active_verification_required", f"{r.status_code} {gst}")
+            login(c, "zz_guest")
+            check("an active guest passes a protected endpoint", c.get("/api/id").status_code == 200)
 
         # verify (1a) and admin-create (1b)
         with app.test_client() as c:
@@ -178,10 +193,75 @@ def main():
             login(c, "zz_admin")
             check("an admin can verify a mentor too", c.post("/api/user/zz_mentor_tok/verify").status_code == 200
                   and get("zz_mentor_tok")["active"])
+            before = get("zz_good")["last_verified"]
+            r = c.post("/api/user/zz_good/deactivate")
+            d = get("zz_good")
+            check("deactivate makes the account inactive and keeps last_verified",
+                  r.status_code == 200 and d["active"] is False and d["state"] == "inactive"
+                  and d["last_verified"] == before, str(d))
+            with app.test_client() as c2:
+                login(c2, "zz_good")
+                check("a deactivated account is refused again", c2.get("/api/user").status_code == 403)
+            check("deactivating your own account is refused",
+                  c.post("/api/user/zz_admin/deactivate").status_code == 400 and get("zz_admin")["active"])
+            check("deactivating an unknown uid is 404", c.post("/api/user/zz_nobody/deactivate").status_code == 404)
         with app.test_client() as c:
             login(c, "zz_student")
-            for path in ("/api/user/zz_mentor/verify", "/api/user/admin-create"):
+            for path in ("/api/user/zz_mentor/verify", "/api/user/zz_mentor/deactivate", "/api/user/admin-create"):
                 check(f"non-staff refused on {path}", c.post(path, json={}).status_code == 403)
+
+    # backup restore keeps the activation fields; an older backup counts as pre-activation accounts
+    with patch("api.user.GitHubUser", FakeGitHub):
+        with app.test_client() as c:
+            login(c, "zz_admin")
+            backup = [
+                dict(name="Old Backup", uid="zz_old", password=PASSWORD, role="User"),
+                dict(name="Inactive Backup", uid="zz_inact", password=PASSWORD, role="Mentor", active=False,
+                     last_verified=None),
+                dict(name="Verified Backup", uid="zz_ver", password=PASSWORD, role="User", active=True,
+                     last_verified="2026-03-15T10:30:00"),
+            ]
+            r = c.post("/api/export/import/users", json={"users": backup})
+            result = (r.get_json() or {}).get("users", {})
+            check("restore imports every account without errors (it returns 200 even when users fail)",
+                  r.status_code == 200 and result.get("failed") == 0 and result.get("imported") == 3, str(result))
+
+        # the rules come from data (model/account_types.json), not code: change the data and
+        # the behaviour changes with it
+        from model import account_types
+        data = copy.deepcopy(account_types._data)
+        data["account_types"]["student"]["google_verified_domains"] = ["school.example"]
+        data["account_types"]["observer"] = dict(role="Observer", google_verified_domains=[], staff_created=True)
+        data["verification_interval_days"] = 30
+        with patch("api.user.GitHubUser", FakeGitHub), patch("model.google_token.requests.get", fake_tokeninfo), \
+                patch.object(account_types, "_data", data):
+            with app.test_client() as c:
+                signup(c, "zz_new_domain", accountType="student", idToken="other-domain")
+                check("a student is activated by the domain listed in the data", get("zz_new_domain")["active"])
+                signup(c, "zz_old_domain", accountType="student", idToken=GOOD)
+                check("the old school domain no longer activates once the data changes",
+                      get("zz_old_domain")["active"] is False)
+            with app.test_client() as c:
+                login(c, "zz_teacher")
+                r = c.post("/api/user/admin-create", json=dict(name="Obs", uid="zz_observer", password=PASSWORD,
+                                                               accountType="observer"))
+                u = get("zz_observer")
+                check("an account type added to the data can be created by staff",
+                      r.status_code == 200 and u and u["role"] == "Observer" and u["active"] is False, f"{r.status_code} {u}")
+                check("and is verified by staff, not by Google",
+                      c.post("/api/user/zz_observer/verify").status_code == 200 and get("zz_observer")["active"])
+            with app.app_context():
+                probe = User(name="Probe", uid="zz_probe30", password=PASSWORD)
+                probe.active = True
+                probe.last_verified = datetime.utcnow() - timedelta(days=31)
+                check("the re-verification interval comes from the data",
+                      probe.verification_state == "active_verification_required")
+    old_acct, inact, ver = get("zz_old"), get("zz_inact"), get("zz_ver")
+    check("a backup with no activation fields restores active, verified 2026-01-30",
+          old_acct and old_acct["active"] and old_acct["last_verified"] == datetime(2026, 1, 30), str(old_acct))
+    check("a backup's inactive account stays inactive", inact and inact["active"] is False, str(inact))
+    check("a backup's last_verified is preserved",
+          ver and ver["active"] and ver["last_verified"] == datetime(2026, 3, 15, 10, 30), str(ver))
 
     # update() cannot self-activate
     with app.app_context():

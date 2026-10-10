@@ -13,6 +13,7 @@
                 <th>Name</th>
                 <th>Email</th>
                 <th>Role</th>
+                <th>Status</th>
                 <th>Profile Picture</th>
                 <th>Kasm Server Needed</th>
                 <th>Courses</th>
@@ -29,6 +30,15 @@
                 <td>{{ user.name }}</td>
                 <td>{{ user.email }}</td>
                 <td>{{ user.role }}</td>
+                <td>
+                    {% if user.verification_state == 'active_verified' %}
+                    <span class="badge bg-success">Active</span>
+                    {% elif user.verification_state == 'active_verification_required' %}
+                    <span class="badge bg-warning text-dark">Active - verification required</span>
+                    {% else %}
+                    <span class="badge bg-secondary">Inactive</span>
+                    {% endif %}
+                </td>
                 <td>
                     {% if user.pfp %}
                     <img src="{{ url_for('uploaded_file', filename=user.uid + '/' + user.pfp) }}" 
@@ -52,6 +62,12 @@
                 <td>
                     <button class="btn btn-primary edit-btn" data-id="{{ user.id }}">Edit</button>
                     {% if current_user.role == 'Admin' %}
+                    {% if user.role not in oauth_roles and user.verification_state != 'active_verified' %}
+                    <button class="btn btn-success status-btn" data-uid="{{ user.uid }}" data-action="verify">{{ 'Activate' if not user.active else 'Verify' }}</button>
+                    {% endif %}
+                    {% if user.active and user.id != current_user.id %}
+                    <button class="btn btn-secondary status-btn" data-uid="{{ user.uid }}" data-action="deactivate">Deactivate</button>
+                    {% endif %}
                     <button class="btn btn-danger delete-btn" data-id="{{ user.id }}">Delete</button>
                     <button class="btn btn-warning reset-password-btn" data-id="{{ user.id }}">Reset Password</button>
                     {% endif %}
@@ -144,6 +160,24 @@
                     .catch(error => {
                         console.error("Error deleting user:", error);
                         alert("Error deleting user.");
+                    });
+            });
+        });
+
+        // Handle activate / verify / deactivate
+        document.querySelectorAll(".status-btn").forEach(button => {
+            button.addEventListener("click", function () {
+                const { uid, action } = this.dataset;
+                if (action === "deactivate" && !confirm(`Deactivate ${uid}? They will be blocked until verified again.`)) return;
+                fetch(`/api/user/${uid}/${action}`, { method: "POST" })
+                    .then(response => response.json().then(data => ({ ok: response.ok, data })))
+                    .then(({ ok, data }) => {
+                        if (!ok) throw new Error(data.message || "Request failed");
+                        location.reload();
+                    })
+                    .catch(error => {
+                        console.error("Error changing status:", error);
+                        alert(error.message || "Error changing status.");
                     });
             });
         });

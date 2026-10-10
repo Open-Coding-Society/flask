@@ -8,6 +8,7 @@ import os
 import json
 
 from __init__ import app, db
+from model import account_types
 from model.github import GitHubUser
 from model.kasm import KasmUser
 
@@ -328,7 +329,7 @@ class User(db.Model, UserMixin):
     def verification_state(self):
         if not self.active:
             return "inactive"
-        if self.last_verified is None or datetime.utcnow() - self.last_verified >= timedelta(days=365):
+        if self.last_verified is None or datetime.utcnow() - self.last_verified >= timedelta(days=account_types.verification_interval_days()):
             return "active_verification_required"
         return "active_verified"
 
@@ -338,7 +339,13 @@ class User(db.Model, UserMixin):
         self.last_verified = datetime.utcnow()
         db.session.commit()
         return self
-    
+
+    def deactivate(self):
+        """Mark the account inactive. Data and last_verified are kept."""
+        self.active = False
+        db.session.commit()
+        return self
+
     # getter method for profile picture
     @property
     def pfp(self):
