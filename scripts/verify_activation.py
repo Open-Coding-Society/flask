@@ -7,7 +7,7 @@ real dev DB before and after to prove it was never touched.
 Usage:  python scripts/verify_activation.py        (from the flask repo root)
 Exit:   0 all checks passed, 1 otherwise.
 """
-import hashlib, os, shutil, sys, tempfile
+import copy, hashlib, os, shutil, sys, tempfile
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -53,7 +53,8 @@ def fake_tokeninfo(url, params=None, timeout=None):
               "wrong-aud": {**good, "aud": "other"},
               "wrong-iss": {**good, "iss": "https://evil.example"},
               "unverified": {**good, "email_verified": "false"},
-              "not-student": {**good, "email": "someone@gmail.com"}}.get((params or {}).get("id_token"))
+              "not-student": {**good, "email": "someone@gmail.com"},
+              "other-domain": {**good, "email": "kid@school.example"}}.get((params or {}).get("id_token"))
     return Resp(200, claims) if claims else Resp(400, {})
 
 
@@ -224,6 +225,37 @@ def main():
             result = (r.get_json() or {}).get("users", {})
             check("restore imports every account without errors (it returns 200 even when users fail)",
                   r.status_code == 200 and result.get("failed") == 0 and result.get("imported") == 3, str(result))
+
+        # the rules come from data (model/account_types.json), not code: change the data and
+        # the behaviour changes with it
+        from model import account_types
+        data = copy.deepcopy(account_types._data)
+        data["account_types"]["student"]["google_verified_domains"] = ["school.example"]
+        data["account_types"]["observer"] = dict(role="Observer", google_verified_domains=[], staff_created=True)
+        data["verification_interval_days"] = 30
+        with patch("api.user.GitHubUser", FakeGitHub), patch("model.google_token.requests.get", fake_tokeninfo), \
+                patch.object(account_types, "_data", data):
+            with app.test_client() as c:
+                signup(c, "zz_new_domain", accountType="student", idToken="other-domain")
+                check("a student is activated by the domain listed in the data", get("zz_new_domain")["active"])
+                signup(c, "zz_old_domain", accountType="student", idToken=GOOD)
+                check("the old school domain no longer activates once the data changes",
+                      get("zz_old_domain")["active"] is False)
+            with app.test_client() as c:
+                login(c, "zz_teacher")
+                r = c.post("/api/user/admin-create", json=dict(name="Obs", uid="zz_observer", password=PASSWORD,
+                                                               accountType="observer"))
+                u = get("zz_observer")
+                check("an account type added to the data can be created by staff",
+                      r.status_code == 200 and u and u["role"] == "Observer" and u["active"] is False, f"{r.status_code} {u}")
+                check("and is verified by staff, not by Google",
+                      c.post("/api/user/zz_observer/verify").status_code == 200 and get("zz_observer")["active"])
+            with app.app_context():
+                probe = User(name="Probe", uid="zz_probe30", password=PASSWORD)
+                probe.active = True
+                probe.last_verified = datetime.utcnow() - timedelta(days=31)
+                check("the re-verification interval comes from the data",
+                      probe.verification_state == "active_verification_required")
     old_acct, inact, ver = get("zz_old"), get("zz_inact"), get("zz_ver")
     check("a backup with no activation fields restores active, verified 2026-01-30",
           old_acct and old_acct["active"] and old_acct["last_verified"] == datetime(2026, 1, 30), str(old_acct))
