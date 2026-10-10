@@ -147,7 +147,9 @@ def login():
     next_page = request.args.get('next', '') or request.form.get('next', '')
     if request.method == 'POST':
         user = User.query.filter_by(_uid=request.form['username']).first()
-        if user and user.is_password(request.form['password']):
+        if user and user.is_password(request.form['password']) and not user.active:
+            error = 'Account pending verification.'
+        elif user and user.is_password(request.form['password']):
             login_user(user)
             if not is_safe_url(next_page):
                 return abort(400)

@@ -18,7 +18,7 @@
                         <table>
                             {% if error %}
                                 <tr class="alert alert-error">
-                                    Invalid username and password.
+                                    {{ error }}
                                 </tr>
                             {% endif %}
                             {% if logout %}
