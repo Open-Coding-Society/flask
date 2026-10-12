@@ -65,6 +65,10 @@ MAX_FUTURE_SKEW = timedelta(minutes=2)
 # How long after a tap the camera can still pick it up, and how long the
 # dashboard shows a tap as being checked before calling it unverified.
 CAMERA_WINDOW = timedelta(seconds=15)
+# Until the camera is connected, taps without a camera result read as
+# RFID_ONLY instead of PENDING/UNVERIFIED. Set CAMERA_ENABLED=true once the
+# Jarvis camera is posting results.
+CAMERA_ENABLED = os.environ.get("CAMERA_ENABLED", "").strip().lower() in ("1", "true", "yes")
 
 
 def require_device_api_key(func):
@@ -117,10 +121,25 @@ def parse_occurred_at(value):
     return dt.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def manual_period_at(dt):
+    manual = (
+        PresencePeriod.query.filter(PresencePeriod._source == "manual", PresencePeriod._start_time <= dt)
+        .order_by(PresencePeriod._start_time.desc())
+        .first()
+    )
+    return manual if manual and manual.contains(dt) else None
+
+
 def period_at(dt):
-    """The period whose window contains dt (naive UTC): the bell schedule
-    first, then a manually started period. Bell periods are stored the
-    first time they are needed so events can reference them."""
+    """The period whose window contains dt (naive UTC). A manually started
+    period wins while it runs, so a teacher who starts one (e.g. for a demo
+    during passing time) knows taps will count; otherwise the bell schedule.
+    Bell periods are stored the first time they are needed so events can
+    reference them."""
+    manual = manual_period_at(dt)
+    if manual:
+        return manual
+
     bell = bell_schedule.get_bell_period(dt)
     if bell:
         name, start_utc, end_utc = bell
@@ -137,27 +156,23 @@ def period_at(dt):
             db.session.commit()
         return period
 
-    manual = (
-        PresencePeriod.query.filter(PresencePeriod._source == "manual", PresencePeriod._start_time <= dt)
-        .order_by(PresencePeriod._start_time.desc())
-        .first()
-    )
-    if manual and manual.contains(dt):
-        return manual
     return None
 
 
 def current_period(now):
-    """The period a dashboard should show right now: the live bell period
-    if school is in session, otherwise the most recently started manual
-    period (kept after it ends so final states stay visible)."""
-    if bell_schedule.get_bell_period(now):
-        return period_at(now)
-    return (
+    """The period a dashboard should show right now: a running manual
+    period, else the live bell period, else the most recently started
+    manual period (kept after it ends so final states stay visible)."""
+    latest_manual = (
         PresencePeriod.query.filter_by(_source="manual", _active=True)
         .order_by(PresencePeriod.id.desc())
         .first()
     )
+    if latest_manual and latest_manual.contains(now):
+        return latest_manual
+    if bell_schedule.get_bell_period(now):
+        return period_at(now)
+    return latest_manual
 
 
 def resolve_user(source, data):
@@ -373,8 +388,8 @@ def pending_taps(classroom_id):
 @presence_api.route('/periods/start', methods=['POST'])
 @token_required(["Admin", "Teacher"])
 def start_period():
-    """Starts a manual period now, for demos/testing outside school hours.
-    Bell-schedule periods always take precedence while school is in session."""
+    """Starts a manual period now, for demos/testing. While it runs it takes
+    precedence over the bell schedule (see period_at)."""
     data = request.get_json(silent=True) or {}
     try:
         duration_seconds = int(data.get("duration_seconds", 120))
@@ -406,6 +421,8 @@ def tap_verification(tap, check, now):
         return None
     if check:
         return check.verification
+    if not CAMERA_ENABLED:
+        return "RFID_ONLY"
     return "PENDING" if now - tap.occurred_at <= CAMERA_WINDOW else "UNVERIFIED"
 
 
