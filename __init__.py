@@ -76,6 +76,9 @@ app.config['DEFAULT_PFP'] = os.environ.get('DEFAULT_PFP') or 'default.png'
 # tokens locally (no call back to Spring). No default -- unset means the
 # frontend-driven reset-password endpoint is closed.
 app.config['RESET_TOKEN_SECRET'] = os.environ.get('RESET_TOKEN_SECRET')
+# OAuth client ID a student's Google ID token must be issued for. No default: unset means
+# no signup is auto-activated.
+app.config['GOOGLE_CLIENT_ID'] = os.environ.get('GOOGLE_CLIENT_ID')
 # Convenience user
 app.config['MY_NAME'] = os.environ.get('MY_NAME') or 'convenience'
 app.config['MY_UID'] = os.environ.get('MY_UID') or 'convenience'

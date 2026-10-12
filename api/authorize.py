@@ -104,7 +104,14 @@ def auth_required(roles=None):
                         "error": str(e)
                     }, 500
             
-            # At this point, user is authenticated via either session or JWT
+            # An inactive account is not authorized until a Teacher/Admin verifies it.
+            if not user.active:
+                return {
+                    "message": "Account pending verification.",
+                    "data": None,
+                    "error": "Forbidden"
+                }, 403
+
             # Now check role requirements if specified
             if roles:
                 # Normalize roles to list for consistent checking

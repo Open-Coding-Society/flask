@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from __init__ import app, db
 from api.authorize import token_required
 from model.user import User
+from model.google_token import verified_student_email
 from model.github import GitHubUser
 import os
 
@@ -181,14 +182,20 @@ class UserAPI:
                 return {'message': f'User ID {uid} not a valid GitHub account' }, 404
             
             ''' User object creation '''
+            # A mentor stays inactive until a Teacher/Admin verifies it. Anyone else is
+            # activated only when Google verifies a school email for the submitted token.
+            is_mentor = (body.get('accountType') or '').lower() == 'mentor'
+            role = 'Mentor' if is_mentor else 'User'
+            verified_email = None if is_mentor else verified_student_email(body.get('idToken'))
+
             #1: Setup minimal User object using __init__ method
             password = body.get('password')
             if password is not None:
                 if len(password) < 8 and not password.startswith("pbkdf2:sha256:"):
                     return {'message': 'Password must be at least 8 characters'}, 400
-                user_obj = User(name=name, uid=uid, password=password)
+                user_obj = User(name=name, uid=uid, password=password, role=role)
             else:
-                user_obj = User(name=name, uid=uid)
+                user_obj = User(name=name, uid=uid, role=role)
             
             # Handle additional fields that frontend sends
             # Create a cleaned body with only the fields User model expects
@@ -232,6 +239,9 @@ class UserAPI:
                         return jsonify(_without_password(db_user.read()))  # Return the user anyway
                     else:
                         return {'message': f'Processed {name}, either a format error or User ID {uid} is duplicate'}, 400
+
+                if verified_email:
+                    user.activate()
 
                 #print(f"Successfully created user: {user.uid}")
                 # return response, the created user details as a JSON object
@@ -847,6 +857,37 @@ class UserAPI:
                 return {'message': f'Failed to reset password for {uid}'}, 500
             return {'message': f'Password reset for {uid}'}, 200
 
+    class _VerifyAccount(Resource):
+        """Teacher/Admin verifies an account: marks it active and records last_verified.
+        Students are not verified here: they obtain access through Google OAuth."""
+        @token_required(["Teacher", "Admin"])
+        def post(self, uid):
+            target = User.query.filter_by(_uid=uid).first()
+            if target is None:
+                return {'message': f'User {uid} not found'}, 404
+            if target.role == 'User':
+                return {'message': 'Student accounts are verified through Google sign-in, not by a Teacher or Admin'}, 400
+            return jsonify(_without_password(target.activate().read()))
+
+    class _AdminCreate(Resource):
+        """Teacher/Admin creates a Mentor account directly. The account starts inactive
+        and follows the same verification step as a self-created one. Students are not
+        created here: they obtain access through Google OAuth."""
+        @token_required(["Teacher", "Admin"])
+        def post(self):
+            body = request.get_json(silent=True) or {}
+            role = {'mentor': 'Mentor'}.get((body.get('accountType') or '').lower())
+            name, uid, password = body.get('name'), body.get('uid'), body.get('password')
+            if role is None:
+                return {'message': "accountType must be 'mentor'"}, 400
+            if not name or not uid or not password or len(password) < 8:
+                return {'message': 'name, uid and a password of at least 8 characters are required'}, 400
+            user = User(name=name, uid=uid, password=password, role=role).create(
+                {'email': body['email']} if body.get('email') else None)
+            if not user:
+                return {'message': f'User ID {uid} is a duplicate or invalid'}, 400
+            return jsonify(_without_password(user.read()))
+
     # building RESTapi endpoint
     api.add_resource(_ID, '/id')
     api.add_resource(_BULK, '/users')
@@ -858,6 +899,8 @@ class UserAPI:
     api.add_resource(_APExam, '/apexam')
     api.add_resource(_School, '/school')
     api.add_resource(_ResetPasswordVerified, '/reset-password')
+    api.add_resource(_VerifyAccount, '/user/<string:uid>/verify')
+    api.add_resource(_AdminCreate, '/user/admin-create')
     
     class _Class(Resource):
         """Manage the user's `class` list (e.g. CSSE, CSP, CSA).
