@@ -550,21 +550,18 @@ class UserAPI:
                                 "data": None
                             }, 500
                  
-        @token_required()
+        # No @token_required here on purpose. Logout only tells the browser to drop
+        # its cookie, so it needs no proof of identity. Guarding it meant a stale
+        # cookie (expired, or issued before a password change) got a 401 before the
+        # cookie could be cleared, and since the cookie is HttpOnly in production the
+        # browser had no other way to get rid of it.
         def delete(self):
-            ''' Invalidate the current user's token by setting its expiry to 0 '''
-            current_user = g.current_user
+            ''' Log out by expiring the JWT cookie, whether or not the token in it is still valid '''
             try:
-                # Generate a token with practically 0 age
-                token = jwt.encode(
-                    {"_uid": current_user._uid, 
-                     "exp": datetime.utcnow()},
-                    current_app.config["SECRET_KEY"],
-                    algorithm="HS256"
-                )
-                # You might want to log this action or take additional steps here
-                
-                # Prepare a response indicating the token has been invalidated
+                # The value is irrelevant; max_age=0 with the same name, domain and
+                # path as the login cookie is what makes the browser delete it.
+                token = ""
+
                 resp = Response("Token invalidated successfully")
                 is_production = os.environ.get('IS_PRODUCTION', 'false').lower() == 'true'
                 if is_production:
