@@ -183,6 +183,24 @@ def main():
             for path in ("/api/user/zz_mentor/verify", "/api/user/admin-create"):
                 check(f"non-staff refused on {path}", c.post(path, json={}).status_code == 403)
 
+        # guests are active but unverified, so the guest feature keeps working
+        with app.test_client() as c:
+            r = c.post("/api/user/guest", json={"uid": "zz_guest", "password": PASSWORD})
+            guest = get("zz_guest")
+            check("a guest is created active but unverified",
+                  r.status_code == 200 and guest["active"] is True and guest["last_verified"] is None
+                  and guest["state"] == "active_verification_required", f"{r.status_code} {guest}")
+            login(c, "zz_guest")
+            check("an active guest passes a protected endpoint", c.get("/api/user").status_code == 200)
+            check("a guest is a plain user: refused on the staff endpoints",
+                  c.post("/api/user/zz_mentor/verify").status_code == 403
+                  and c.post("/api/user/admin-create", json={}).status_code == 403 and guest["role"] == "User")
+            before = get("zz_no_token")
+            with app.test_client() as c2:
+                c2.post("/api/user/guest", json={"uid": "zz_no_token", "password": PASSWORD})
+            check("a guest request for an existing inactive uid does not activate it",
+                  before["active"] is False and get("zz_no_token") == before, f"{before} -> {get('zz_no_token')}")
+
     # update() cannot self-activate
     with app.app_context():
         u = User.query.filter_by(_uid="zz_noclient").first()

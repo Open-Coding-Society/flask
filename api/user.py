@@ -789,8 +789,11 @@ class UserAPI:
             sid = "?"
             school = "?"
 
-            # Create User object with auto-generated name
+            # Create User object with auto-generated name. A guest logs in straight away, so the
+            # account is active from the first commit. It is not verified: last_verified stays
+            # empty, so it reads "Active / Verification Required".
             user_obj = User(name=name, uid=uid, password=password)
+            user_obj.active = True
 
             # Build cleaned body with all fields filled
             cleaned_body = {
