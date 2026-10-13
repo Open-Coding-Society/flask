@@ -4,6 +4,7 @@ Provides comprehensive endpoints for exporting and importing ALL database data.
 Used by db_migrate and db_restore scripts for database migration.
 """
 
+from datetime import datetime
 from flask import Blueprint, request, jsonify, g
 from flask_restful import Api, Resource
 from api.authorize import token_required
@@ -22,6 +23,10 @@ from model.skill_snapshot import SkillSnapshot
 
 data_export_import_api = Blueprint('data_export_import_api', __name__, url_prefix='/api/export')
 api = Api(data_export_import_api)
+
+# Accounts in a backup made before account activation existed were all in use, so they are
+# restored active and verified on the date the activation migration gives existing accounts.
+LEGACY_BACKUP_VERIFIED = datetime(2026, 1, 30)
 
 
 def _parse_dt(value):
@@ -431,6 +436,15 @@ class ImportAllData(Resource):
                 # Set email via property (not a constructor param)
                 if user_data.get('email'):
                     user.email = user_data.get('email')
+
+                # Restore who was active. A backup without the field predates activation.
+                has_activation_state = 'active' in user_data
+                if has_activation_state:
+                    user.active = user_data['active'] is True  # only a real true activates; "false" or null do not
+                    user.last_verified = _parse_dt(user_data.get('last_verified'))
+                else:
+                    user.active = True
+                    user.last_verified = LEGACY_BACKUP_VERIFIED
 
                 # Add sections if provided
                 if 'sections' in user_data and user_data['sections']:
