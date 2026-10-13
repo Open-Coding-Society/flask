@@ -4,10 +4,14 @@ from functools import wraps
 import jwt
 from model.user import User
 
-def auth_required(roles=None):
+def auth_required(roles=None, allow_inactive=False):
     '''
     Hybrid authentication decorator supporting both session and JWT token authentication.
-    
+
+    An account that is not active yet is refused with 403 "Account pending verification."
+    unless allow_inactive is True, which is used only where a pending user must be able to
+    read their own state.
+
     This function guards API endpoints by:
       1. First checking for Flask-Login session authentication (current_user)
       2. If no session, checks for valid JWT token in request cookies
@@ -23,12 +27,17 @@ def auth_required(roles=None):
     Args:
         roles: String or list of allowed roles (e.g., "Admin" or ["Admin", "Teacher"])
                If None, any authenticated user is allowed
-    
+        allow_inactive: let an account that is not active yet through. Cannot be combined
+               with roles, so a pending account never reaches a role-restricted endpoint.
+
     Possible error responses:
       A. 401 / Unauthorized: no session and token is missing or invalid
-      B. 403 / Forbidden: user has insufficient permissions
+      B. 403 / Forbidden: user has insufficient permissions, or the account is not active yet
       C. 500 / Internal Server Error: something went wrong with token decoding
     '''
+    if allow_inactive and roles:
+        raise ValueError("allow_inactive cannot be combined with roles")
+
     def decorator(func_to_guard):
         @wraps(func_to_guard)
         def decorated(*args, **kwargs):
@@ -104,8 +113,9 @@ def auth_required(roles=None):
                         "error": str(e)
                     }, 500
             
-            # An inactive account is not authorized until a Teacher/Admin verifies it.
-            if not user.active:
+            # An inactive account is not authorized until a Teacher/Admin verifies it,
+            # unless this endpoint explicitly allows it.
+            if not (user.active or allow_inactive):  # access requirement not met
                 return {
                     "message": "Account pending verification.",
                     "data": None,
@@ -139,9 +149,9 @@ def auth_required(roles=None):
 
 
 # Alias for backward compatibility with existing code using token_required
-def token_required(roles=None):
+def token_required(roles=None, allow_inactive=False):
     '''
     Backward compatibility alias for auth_required.
     Existing code using @token_required will continue to work.
     '''
-    return auth_required(roles)
+    return auth_required(roles, allow_inactive)
