@@ -1,0 +1,15 @@
+
+@baseUrl = http://127.0.0.1:8587
+
+### Authenticate
+# @prompt uid Enter your user ID
+# @prompt password Enter your password
+
+POST {{baseUrl}}/api/authenticate
+Content-Type: application/json
+Accept: application/json
+
+{
+  "uid": "{{uid}}",
+  "password": "{{password}}"
+}
