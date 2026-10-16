@@ -108,6 +108,14 @@ def main():
         login_api(c, "zz_admin")
         check("an Admin can deactivate too", c.post("/api/user/zz_mentor_lapsed/deactivate").status_code == 200)
 
+    # the table's buttons call the API with only the page's own login session (no separate token)
+    with app.test_client() as c:
+        c.post("/login", data={"username": "zz_teacher", "password": PASSWORD})
+        check("the buttons work with the table page's own login session: Deactivate",
+              c.post("/api/user/zz_mentor/deactivate").status_code == 200 and get("zz_mentor")["active"] is False)
+        check("the buttons work with the table page's own login session: Activate",
+              c.post("/api/user/zz_mentor/verify").status_code == 200 and get("zz_mentor")["active"] is True)
+
     # put the accounts back to their starting states for the table checks
     with app.app_context():
         for uid, (role, state) in accounts.items():
