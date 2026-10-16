@@ -40,7 +40,7 @@ class MicroBlog(db.Model):
    _updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
   
    # Relationships
-   user = db.relationship('User', foreign_keys=[_user_id], backref=db.backref('microblogs', lazy=True))
+   user = db.relationship('User', foreign_keys=[_user_id], backref=db.backref('microblogs', lazy=True, cascade='save-update, merge, delete'))
    topic = db.relationship('Topic', foreign_keys=[_topic_id], backref=db.backref('microblogs', lazy=True))
 
 
