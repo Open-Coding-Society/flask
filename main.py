@@ -215,7 +215,8 @@ def uploaded_file(filename):
 def delete_user(user_id):
     user = User.query.get(user_id)
     if user:
-        user.delete()
+        if user.delete() is None:
+            return jsonify({'error': f'Cannot delete this user: {User.DELETE_BLOCKED}'}), 409
         return jsonify({'message': 'User deleted successfully'}), 200
     return jsonify({'error': 'User not found'}), 404
 

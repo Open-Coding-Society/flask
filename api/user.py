@@ -380,8 +380,9 @@ class UserAPI:
            
             # Read and then Delete the User object using custom methods
             user_json = _without_password(user.read())
-            user.delete()
-            
+            if user.delete() is None:
+                return {'message': f'Cannot delete {uid}: {User.DELETE_BLOCKED}'}, 409
+
             # 204 is the status code for delete with no json response
             return f"Deleted user: {user_json}", 204 # use 200 to test with Postman
          

@@ -601,16 +601,27 @@ class User(db.Model, UserMixin):
             return None
         return self
     
-    # CRUD delete: remove self
-    # None
+    # Shown when a delete is refused. The cause is logged, since the database's reason can differ.
+    DELETE_BLOCKED = ("the database refused, usually because the user still has related records "
+                      "(discussion posts, classroom, leaderboard, study or skill data)")
+
+    # CRUD delete: remove self. Returns self on success (do not read its attributes afterwards: it is
+    # deleted), or None if the database refused, in which case the transaction is rolled back and
+    # nothing is half-deleted. Same None-on-IntegrityError convention as update().
     def delete(self):
+        uid = self.uid
         try:
-            KasmUser().delete(self.uid)
             db.session.delete(self)
             db.session.commit()
-        except IntegrityError:
+        except IntegrityError as e:
             db.session.rollback()
-        return None   
+            print(f"Delete refused for user {uid}: {e.orig}")
+            return None
+        try:
+            KasmUser().delete(uid)  # only once the account is really gone
+        except Exception as e:
+            print(f"Kasm cleanup failed for deleted user {uid}: {e}")
+        return self
     
     def save_pfp(self, image_data, filename):
         """For saving profile picture."""
