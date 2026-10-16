@@ -7,6 +7,24 @@
 
     {% set is_staff = current_user.role in ['Admin', 'Teacher'] %}
 
+    {% if is_staff %}
+    <div class="d-flex flex-wrap align-items-center gap-3 mb-3" id="accountFilters">
+        <div class="btn-group" role="group" aria-label="Filter by status">
+            <button type="button" class="btn btn-outline-secondary active" data-status="all">All</button>
+            <button type="button" class="btn btn-outline-secondary" data-status="true">Active</button>
+            <button type="button" class="btn btn-outline-secondary" data-status="false">Inactive</button>
+        </div>
+        <label class="mb-0">Role:
+            <select id="roleFilter" class="form-select d-inline-block w-auto">
+                <option value="">All</option>
+                {% for role in user_data|map(attribute='role')|unique|sort %}
+                <option value="{{ role }}">{{ role }}</option>
+                {% endfor %}
+            </select>
+        </label>
+    </div>
+    {% endif %}
+
     <table class="table table-striped" id="userTable">
         <thead>
             <tr>
@@ -26,7 +44,7 @@
         <tbody>
             {% for user in user_data %}
             {% if user.id == current_user.id or is_staff %}
-            <tr id="user-{{ user.id }}">
+            <tr id="user-{{ user.id }}" data-role="{{ user.role }}" data-active="{{ 'true' if user.active else 'false' }}">
                 <td>{{ user.id }}</td>
                 <td>{{ user.uid }}</td>
                 <td>{{ user.name }}</td>
@@ -89,6 +107,31 @@
         const table =  $("#userTable").DataTable(); // repersents table
 
         table.page.len(-1).draw();  // shows all users and commits
+
+        // Filter by active state and role, read from each row's data attributes
+        let statusFilter = "all";
+        let roleFilter = "";
+        $.fn.dataTable.ext.search.push(function (settings, data, dataIndex) {
+            if (settings.nTable.id !== "userTable") return true;
+            const row = table.row(dataIndex).node();
+            const statusMatches = statusFilter === "all" || row.dataset.active === statusFilter;
+            const roleMatches = roleFilter === "" || row.dataset.role === roleFilter;
+            return statusMatches && roleMatches;
+        });
+        document.querySelectorAll("#accountFilters [data-status]").forEach(button => {
+            button.addEventListener("click", function () {
+                statusFilter = this.dataset.status;
+                document.querySelectorAll("#accountFilters [data-status]").forEach(b => b.classList.toggle("active", b === this));
+                table.draw();
+            });
+        });
+        const roleSelect = document.getElementById("roleFilter");
+        if (roleSelect) {
+            roleSelect.addEventListener("change", function () {
+                roleFilter = this.value;
+                table.draw();
+            });
+        }
         // Function to fetch commits (DISABLED)
         /*
         async function fetchAdminData(userUid) {
