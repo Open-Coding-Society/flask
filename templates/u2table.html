@@ -13,6 +13,7 @@
                 <th>Name</th>
                 <th>Email</th>
                 <th>Role</th>
+                <th>Status</th>
                 <th>Profile Picture</th>
                 <th>Kasm Server Needed</th>
                 <th>Courses</th>
@@ -29,6 +30,15 @@
                 <td>{{ user.name }}</td>
                 <td>{{ user.email }}</td>
                 <td>{{ user.role }}</td>
+                <td>
+                    {% if user.verification_state == 'active_verified' %}
+                    <span class="badge bg-success">Active</span>
+                    {% elif user.verification_state == 'active_verification_required' %}
+                    <span class="badge bg-warning text-dark">Active - verification required</span>
+                    {% else %}
+                    <span class="badge bg-secondary">Inactive</span>
+                    {% endif %}
+                </td>
                 <td>
                     {% if user.pfp %}
                     <img src="{{ url_for('uploaded_file', filename=user.uid + '/' + user.pfp) }}" 
