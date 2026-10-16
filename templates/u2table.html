@@ -136,8 +136,12 @@
                     method: "DELETE",
                     headers: { "Content-Type": "application/json" },
                 })
-                    .then(response => response.json())
-                    .then(data => {
+                    .then(response => response.json().catch(() => ({})).then(data => ({ ok: response.ok, status: response.status, data })))
+                    .then(({ ok, status, data }) => {
+                        if (!ok) {
+                            alert(data.error || data.message || `Could not delete the user (HTTP ${status}).`);
+                            return;
+                        }
                         alert(data.message || "User deleted successfully.");
                         location.reload();
                     })
