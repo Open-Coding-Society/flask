@@ -127,6 +127,57 @@ pip install -r requirements.txt
   - Basic API test
     - [Jokes](http://localhost:8587/api/jokes/)
 
+### HTTP requests in VS Code
+
+Install the **REST Client** extension (Huachao Mao) and open
+[api/user_auth.http](api/user_auth.http). Click **Send Request** to authenticate;
+the request prompts for your user ID and password.
+
+The shared `baseUrl` configuration lives in
+[.vscode/settings.json](.vscode/settings.json), under
+`rest-client.environmentVariables`. Run **REST Client: Switch Environment**
+from the command palette (or click the REST Client environment in the status
+bar) to select:
+
+- **local**: `http://127.0.0.1:8587`, inherited from `$shared`.
+- **deployed**: `https://flask.opencodingsociety.com`.
+
+With **No Environment** selected, the shared localhost URL is used as a safe
+default. All request files should use `{{baseUrl}}` rather than defining a
+file-level `@baseUrl`, which would override the selected environment.
+Change the deployed URL for your own deployment.
+
+REST Client does not read Python's `app.config` directly. If you change
+`FLASK_PORT` in `.env`, also update the localhost URL in the shared settings.
+Keep credentials out of these version-controlled settings; use the request
+prompts instead.
+
+#### Manual user CRUD sequence
+
+Open [api/user_crud.http](api/user_crud.http) and set `testUid` to a disposable,
+valid GitHub username that does not already exist in this app. Select **local**
+for development; the same requests also work with **deployed**, but mutate
+real data in that environment.
+
+1. Run [api/user_auth.http](api/user_auth.http) separately with an active
+   **Admin** account. REST Client remembers response cookies by default and
+   reuses them for matching hosts across request files. Authenticate again
+   after switching environments.
+2. Click **Send Request** for each numbered CRUD request, top to bottom.
+   Check the expected response in each heading before proceeding; stop if a
+   step fails, especially Create, to avoid modifying an existing account.
+3. After Delete, rerun Read all users and confirm `testUid` is absent.
+
+`GET /api/id` returns the logged-in Admin, not the newly created user.
+Updating another user and deleting users require Admin access. The example
+retains `dob`, but the create endpoint currently ignores it.
+`kasm_server_needed: true` requests Kasm provisioning; change it to `false`
+if you only want to exercise user CRUD without requesting a server.
+
+These are manual checks, not automated assertions. REST Client does not run
+all requests as an automated test sequence; a runner such as pytest or
+HTTPYac is needed for that.
+
 ### User Operations
 | Purpose | Correct Endpoint | What It Does |
 |---------|-----------------|--------------|
