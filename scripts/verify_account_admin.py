@@ -46,7 +46,8 @@ def main():
     # uid -> (role, state): the four states the table has to tell apart, for a Google-verified and a
     # staff-verified kind of account
     accounts = {
-        "zz_admin": ("Admin", "verified"), "zz_teacher": ("Teacher", "verified"),
+        "zz_admin": ("Admin", "verified"), "zz_admin2": ("Admin", "verified"),
+        "zz_teacher": ("Teacher", "verified"), "zz_teacher2": ("Teacher", "verified"),
         "zz_student": ("User", "verified"), "zz_student_lapsed": ("User", "lapsed"), "zz_student_pending": ("User", "pending"),
         "zz_mentor": ("Mentor", "verified"), "zz_mentor_lapsed": ("Mentor", "lapsed"), "zz_mentor_pending": ("Mentor", "pending"),
     }
@@ -176,6 +177,83 @@ def main():
     check("each row carries its role and active state for the filters",
           states["zz_mentor"] == ("Mentor", "true") and states["zz_mentor_pending"] == ("Mentor", "false")
           and states["zz_student_pending"] == ("User", "false"), str(states))
+
+    # ---- John's rules: protect Admin accounts and the last Admin and Teacher ---------------
+    def set_active(uid, value):
+        with app.app_context():
+            User.query.filter_by(_uid=uid).first().active = value
+            db.session.commit()
+
+    def exists(uid):
+        return get(uid) is not None
+
+    def table_delete(login_uid, target_id):
+        with app.test_client() as c:
+            c.post("/login", data={"username": login_uid, "password": PASSWORD})
+            return c.delete(f"/users/delete/{target_id}")
+
+    with app.test_client() as c:
+        login_api(c, "zz_teacher")
+        r = c.post("/api/user/zz_admin/deactivate")
+        check("a Teacher cannot deactivate an Admin (403) and the Admin stays active",
+              r.status_code == 403 and get("zz_admin")["active"] is True, r.status_code)
+    with app.test_client() as c:
+        login_api(c, "zz_admin")
+        check("an Admin can deactivate another Admin while another active Admin remains",
+              c.post("/api/user/zz_admin2/deactivate").status_code == 200 and get("zz_admin2")["active"] is False)
+        r = c.post("/api/user/zz_admin/deactivate")
+        check("the last active Admin cannot be deactivated (409), not even by themselves",
+              r.status_code == 409 and get("zz_admin")["active"] is True, f"{r.status_code} {r.get_json()}")
+        check("a Teacher can be deactivated while another active Teacher remains",
+              c.post("/api/user/zz_teacher2/deactivate").status_code == 200)
+        r = c.post("/api/user/zz_teacher/deactivate")
+        check("the last active Teacher cannot be deactivated (409)", r.status_code == 409 and get("zz_teacher")["active"] is True,
+              f"{r.status_code} {r.get_json()}")
+    set_active("zz_admin2", True)
+
+    with app.app_context():  # accounts of their own, so the table checks above are unaffected
+        for uid, role in (("zz_gone_admin", "Admin"), ("zz_gone_mentor", "Mentor"), ("zz_gone_mentor2", "Mentor"), ("zz_gone_mentor3", "Mentor")):
+            u = User(name=uid, uid=uid, password=PASSWORD, role=role)
+            db.session.add(u)
+            db.session.commit()
+            u.activate()
+        ids = {u.uid: u.id for u in User.query.all()}
+    with app.test_client() as c:
+        login_api(c, "zz_teacher")
+        r = c.delete("/api/user", json={"uid": "zz_gone_mentor"})
+        check("a Teacher cannot delete an account through the API (403)", r.status_code == 403 and exists("zz_gone_mentor"), r.status_code)
+    r = table_delete("zz_teacher", ids["zz_gone_mentor"])
+    check("a Teacher cannot delete an account through the table (403)", r.status_code == 403 and exists("zz_gone_mentor"), r.status_code)
+    r = table_delete("zz_student", ids["zz_gone_mentor"])
+    check("a student cannot delete an account through the table (403)", r.status_code == 403 and exists("zz_gone_mentor"), r.status_code)
+    r = table_delete("zz_admin", ids["zz_admin"])
+    check("an Admin cannot delete their own account through the table (403)", r.status_code == 403 and exists("zz_admin"), r.status_code)
+    with app.test_client() as c:
+        login_api(c, "zz_admin")
+        r = c.delete("/api/user", json={"uid": "zz_admin"})
+        check("an Admin cannot delete their own account through the API (403)", r.status_code == 403 and exists("zz_admin"), r.status_code)
+        check("an Admin can delete another Admin through the API (204)",
+              c.delete("/api/user", json={"uid": "zz_gone_admin"}).status_code == 204 and not exists("zz_gone_admin"))
+    r = table_delete("zz_admin", ids["zz_gone_mentor"])
+    check("an Admin can delete another account through the table (200)", r.status_code == 200 and not exists("zz_gone_mentor"), r.status_code)
+    set_active("zz_teacher2", False)
+    r = table_delete("zz_admin", ids["zz_teacher"])
+    check("the last active Teacher cannot be deleted (409)", r.status_code == 409 and exists("zz_teacher"), r.status_code)
+    set_active("zz_teacher2", True)
+
+    # what the table offers
+    html_t, _ = table("zz_teacher")
+    html_a, _ = table("zz_admin")
+    check("a Teacher is offered no Deactivate on an Admin's row", actions(html_t, "zz_admin") == [], str(actions(html_t, "zz_admin")))
+    check("an Admin is offered Deactivate on another Admin's row, not on their own",
+          ("deactivate", "Deactivate") in actions(html_a, "zz_admin2") and actions(html_a, "zz_admin") == [])
+    check("an Admin is offered Delete on another row, but not on their own",
+          "delete-btn" in row(html_a, "zz_gone_mentor2") and "delete-btn" not in row(html_a, "zz_admin"))
+    set_active("zz_teacher2", False)
+    html_a2, _ = table("zz_admin")
+    check("the last active Teacher's row offers neither Deactivate nor Delete",
+          actions(html_a2, "zz_teacher") == [] and "delete-btn" not in row(html_a2, "zz_teacher"))
+    set_active("zz_teacher2", True)
 
     after = sha256(REAL_DB) if os.path.exists(REAL_DB) else None
     check("real dev DB untouched", real_before == after)
