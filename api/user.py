@@ -865,17 +865,25 @@ class UserAPI:
             return {'message': f'Password reset for {uid}'}, 200
 
     class _VerifyAccount(Resource):
-        """Teacher/Admin verifies an account: marks it active and records last_verified.
-        Accounts verified through Google OAuth (see model/account_types.json) are not
-        verified here."""
+        """Teacher/Admin verifies any account: marks it active and records last_verified.
+        How long that covers is fixed for some roles (see model/account_types.json); for the
+        others the optional JSON body {"days": N} says (1 up to the full interval), and
+        default_verification_days applies when it is left out."""
         @token_required(["Teacher", "Admin"])
         def post(self, uid):
             target = User.query.filter_by(_uid=uid).first()
             if target is None:
                 return {'message': f'User {uid} not found'}, 404
-            if target.role in account_types.oauth_roles():
-                return {'message': 'This account is verified through Google sign-in, not by a Teacher or Admin'}, 400
-            return jsonify(_without_password(target.activate().read()))
+            days = account_types.fixed_verification_days(target.role)
+            if days is None:
+                body = request.get_json(silent=True)
+                if body is not None and not isinstance(body, dict):
+                    return {'message': 'The body must be a JSON object such as {"days": 30}'}, 400
+                days = (body or {}).get('days', account_types.default_verification_days())
+            interval = account_types.verification_interval_days()
+            if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= interval:
+                return {'message': f'days must be a whole number from 1 to {interval}'}, 400
+            return jsonify(_without_password(target.activate(days).read()))
 
     class _DeactivateAccount(Resource):
         """Teacher/Admin marks an account inactive. The account and its data are kept."""
