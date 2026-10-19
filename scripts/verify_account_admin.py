@@ -7,8 +7,9 @@ to prove it was never touched. Complements scripts/verify_activation.py, which c
 Usage:  python scripts/verify_account_admin.py        (from the flask repo root)
 Exit:   0 all checks passed, 1 otherwise.
 """
-import hashlib, os, re, secrets, sys, tempfile
+import copy, hashlib, os, re, secrets, sys, tempfile
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(REPO)
@@ -40,6 +41,7 @@ def main():
     with app.app_context():
         db.engines[None] = create_engine(f"sqlite:///{os.path.join(tempfile.mkdtemp(prefix='acctadmin-'), 'new.db')}")
     import main  # noqa: F401  registers every model and blueprint
+    from model import account_types
     from model.user import User
     app.config["TESTING"] = True
 
@@ -254,9 +256,6 @@ def main():
     set_active("zz_admin2", True)
 
     # the must-keep roles come from the data (model/account_types.json), not from code
-    import copy
-    from unittest.mock import patch
-    from model import account_types
     set_active("zz_admin2", False)
     changed = copy.deepcopy(account_types._data)
     changed["essential_roles"] = ["Mentor"]
@@ -283,10 +282,99 @@ def main():
           actions(html_a2, "zz_teacher") == [] and "delete-btn" not in row(html_a2, "zz_teacher"))
     set_active("zz_teacher2", True)
 
+    # ---- changing roles -------------------------------------------------------------------
+    with app.app_context():  # accounts of their own
+        for uid, role in (("zz_r_student", "User"), ("zz_r_mentor", "Mentor"), ("zz_r_admin", "Admin"), ("zz_r_teacher", "Teacher")):
+            u = User(name=uid, uid=uid, password=PASSWORD, role=role)
+            db.session.add(u)
+            db.session.commit()
+            u.activate()
+
+    def role_of(uid):
+        return get(uid)["role"]
+
+    with app.test_client() as c:
+        login_api(c, "zz_teacher")
+        r = c.post("/api/user/zz_r_student/role", json={"role": "Mentor"})
+        check("a Teacher can change a student to a mentor (200)", r.status_code == 200 and role_of("zz_r_student") == "Mentor", r.status_code)
+        check("... and to a teacher, and back to a student",
+              c.post("/api/user/zz_r_student/role", json={"role": "Teacher"}).status_code == 200
+              and c.post("/api/user/zz_r_student/role", json={"role": "User"}).status_code == 200 and role_of("zz_r_student") == "User")
+        r = c.post("/api/user/zz_r_student/role", json={"role": "Admin"})
+        check("a Teacher cannot make someone an Admin (403)", r.status_code == 403 and role_of("zz_r_student") == "User", r.status_code)
+        r = c.post("/api/user/zz_r_admin/role", json={"role": "Mentor"})
+        check("a Teacher cannot change an Admin's role (403)", r.status_code == 403 and role_of("zz_r_admin") == "Admin", r.status_code)
+        r = c.post("/api/user/zz_teacher/role", json={"role": "Mentor"})
+        check("nobody changes their own role: a Teacher is refused (403)", r.status_code == 403 and role_of("zz_teacher") == "Teacher", r.status_code)
+        check("a role that does not exist is a 400", c.post("/api/user/zz_r_student/role", json={"role": "Wizard"}).status_code == 400)
+        for odd in ({}, {"role": None}, [], "Mentor"):
+            check(f"a missing or malformed role ({odd!r}) is a 400",
+                  c.post("/api/user/zz_r_student/role", json=odd).status_code == 400 and role_of("zz_r_student") == "User")
+        check("an unknown uid is 404", c.post("/api/user/zz_nobody/role", json={"role": "Mentor"}).status_code == 404)
+    with app.test_client() as c:
+        login_api(c, "zz_student")
+        check("a non-staff account is refused (403)", c.post("/api/user/zz_r_mentor/role", json={"role": "User"}).status_code == 403
+              and role_of("zz_r_mentor") == "Mentor")
+    with app.test_client() as c:
+        login_api(c, "zz_admin")
+        check("an Admin can make a Teacher an Admin (200)",
+              c.post("/api/user/zz_r_teacher/role", json={"role": "Admin"}).status_code == 200 and role_of("zz_r_teacher") == "Admin")
+        check("an Admin can change another Admin to something else (200)",
+              c.post("/api/user/zz_r_teacher/role", json={"role": "Teacher"}).status_code == 200 and role_of("zz_r_teacher") == "Teacher")
+        r = c.post("/api/user/zz_admin/role", json={"role": "Teacher"})
+        check("nobody changes their own role: an Admin is refused (403)", r.status_code == 403 and role_of("zz_admin") == "Admin", r.status_code)
+        set_active("zz_teacher2", False)
+        set_active("zz_r_teacher", False)
+        r = c.post("/api/user/zz_teacher/role", json={"role": "Mentor"})
+        check("the last active Teacher cannot be changed to another role (409)",
+              r.status_code == 409 and role_of("zz_teacher") == "Teacher", f"{r.status_code} {r.get_json()}")
+        set_active("zz_teacher2", True)
+        set_active("zz_r_teacher", True)
+        check("setting the role an account already has is accepted",
+              c.post("/api/user/zz_r_mentor/role", json={"role": "Mentor"}).status_code == 200)
+    changed = copy.deepcopy(account_types._data)
+    changed["staff_roles"] = ["Observer", "Admin"]
+    with patch.object(account_types, "_data", changed):
+        with app.test_client() as c:
+            login_api(c, "zz_admin")
+            a = c.post("/api/user/zz_r_mentor/role", json={"role": "Observer"}).status_code
+            b = c.post("/api/user/zz_r_mentor/role", json={"role": "Teacher"}).status_code
+    check("the roles that can be given come from the data: Observer is accepted and Teacher is refused once the data says so",
+          a == 200 and b == 400 and role_of("zz_r_mentor") == "Observer", f"{a} {b} {role_of('zz_r_mentor')}")
+    with app.app_context():
+        User.query.filter_by(_uid="zz_r_mentor").first().role = "Mentor"
+        db.session.commit()
+
+    with app.app_context():  # an account whose role is no longer in the list can still be fixed
+        u = User(name="zz_r_legacy", uid="zz_r_legacy", password=PASSWORD, role="Pending")
+        db.session.add(u)
+        db.session.commit()
+        u.activate()
+    with app.test_client() as c:
+        login_api(c, "zz_teacher")
+        check("an account with a role that is no longer offered can still be moved to a valid one",
+              c.post("/api/user/zz_r_legacy/role", json={"role": "User"}).status_code == 200 and role_of("zz_r_legacy") == "User")
+    with app.app_context():
+        User.query.filter_by(_uid="zz_r_legacy").first().role = "Pending"
+        db.session.commit()
+
+    # the Edit button and its dialog
+    html_t, _ = table("zz_teacher")
+    html_a, _ = table("zz_admin")
+    edit = lambda h, uid: 'edit-btn" data-uid="%s"' % uid in row(h, uid)
+    check("a Teacher gets Edit on a student and on another Teacher, not on an Admin or on their own row",
+          edit(html_t, "zz_student") and edit(html_t, "zz_teacher2") and not edit(html_t, "zz_admin") and not edit(html_t, "zz_teacher"))
+    html_t, _ = table("zz_teacher")
+    check("Edit is still offered on an account whose current role is no longer in the list", edit(html_t, "zz_r_legacy"))
+    check("an Admin gets Edit on another Admin, not on their own row", edit(html_a, "zz_admin2") and not edit(html_a, "zz_admin"))
+    h, _ = table("zz_student")
+    check("a student has no Edit button and no role dialog", "edit-btn" not in h.split("<script>")[0] and 'id="roleModal"' not in h)
+    options = lambda h: re.findall(r'<option value="(\w+)">\1</option>', h.split('id="roleSelect"')[1].split("</select>")[0])
+    check("the role dialog offers a Teacher User, Mentor and Teacher; an Admin also gets Admin (from the data)",
+          options(html_t) == ["User", "Mentor", "Teacher"] and options(html_a) == ["User", "Mentor", "Teacher", "Admin"],
+          f"{options(html_t)} | {options(html_a)}")
+
     # ---- how long an activation by a Teacher or Admin covers -----------------------------------
-    import copy
-    from unittest.mock import patch
-    from model import account_types
     with app.app_context():  # accounts of their own, all inactive
         for uid, role in (("zz_v_student", "User"), ("zz_v_student2", "User"), ("zz_v_mentor", "Mentor"),
                           ("zz_v_teacher", "Teacher"), ("zz_v_bad", "User")):
