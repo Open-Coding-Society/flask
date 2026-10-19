@@ -9,7 +9,8 @@ Each account type has:
                            inactive and a Teacher/Admin verifies it.
   staff_created            whether a Teacher/Admin may create this type directly
 verification_interval_days is how long a verification stays current. default_account_type is
-used when a signup names no type, or one that is not listed.
+used when a signup names no type, or one that is not listed. essential_roles are the roles of
+which at least one active account must always remain.
 """
 import json
 import os
@@ -45,3 +46,8 @@ def staff_created():
 
 def verification_interval_days():
     return _data["verification_interval_days"]
+
+
+def essential_roles():
+    """Roles of which at least one active account must always remain."""
+    return tuple(_data["essential_roles"])
