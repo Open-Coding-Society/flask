@@ -85,12 +85,14 @@
                     {% if user.staff_verifies and user.verification_due %}
                     <button class="btn btn-success status-btn" data-uid="{{ user.uid }}" data-action="verify">{{ 'Verify' if user.active else 'Activate' }}</button>
                     {% endif %}
-                    {% if user.active and user.id != current_user.id %}
+                    {% if user.active and user.id != current_user.id and user.deactivation_blocker(current_user) is none %}
                     <button class="btn btn-secondary status-btn" data-uid="{{ user.uid }}" data-action="deactivate">Deactivate</button>
                     {% endif %}
                     {% endif %}
                     {% if current_user.role == 'Admin' %}
+                    {% if user.deletion_blocker(current_user) is none %}
                     <button class="btn btn-danger delete-btn" data-id="{{ user.id }}">Delete</button>
+                    {% endif %}
                     <button class="btn btn-warning reset-password-btn" data-id="{{ user.id }}">Reset Password</button>
                     {% endif %}
                 </td>
@@ -199,14 +201,15 @@
                     method: "DELETE",
                     headers: { "Content-Type": "application/json" },
                 })
-                    .then(response => response.json())
-                    .then(data => {
+                    .then(response => response.json().then(data => ({ ok: response.ok, data })))
+                    .then(({ ok, data }) => {
+                        if (!ok) throw new Error(data.error || data.message || "Could not delete the user.");
                         alert(data.message || "User deleted successfully.");
                         location.reload();
                     })
                     .catch(error => {
                         console.error("Error deleting user:", error);
-                        alert("Error deleting user.");
+                        alert(error.message || "Error deleting user.");
                     });
             });
         });
