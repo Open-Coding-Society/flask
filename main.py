@@ -215,6 +215,9 @@ def uploaded_file(filename):
 def delete_user(user_id):
     user = User.query.get(user_id)
     if user:
+        blocker = user.deletion_blocker(current_user)
+        if blocker:
+            return jsonify({'error': blocker[1]}), blocker[0]
         user.delete()
         return jsonify({'message': 'User deleted successfully'}), 200
     return jsonify({'error': 'User not found'}), 404

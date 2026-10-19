@@ -346,6 +346,29 @@ class User(db.Model, UserMixin):
         db.session.commit()
         return self
 
+    def is_last_active_essential(self):
+        """True when this is the only active account of a role the system must keep."""
+        return (self.active and self.role in account_types.essential_roles()
+                and User.query.filter_by(_role=self.role, active=True).count() == 1)
+
+    def deactivation_blocker(self, actor):
+        """None if actor may deactivate this account, else (HTTP status, reason)."""
+        if self.is_admin() and not actor.is_admin():
+            return 403, "Only an Admin can deactivate an Admin"
+        if self.is_last_active_essential():
+            return 409, f"At least one active {self.role} account must remain"
+        return None
+
+    def deletion_blocker(self, actor):
+        """None if actor may delete this account, else (HTTP status, reason)."""
+        if not (actor.is_admin() and actor.active):
+            return 403, "Only an active Admin can delete accounts"
+        if self.id == actor.id:
+            return 403, "You cannot delete your own account; another Admin must do it"
+        if self.is_last_active_essential():
+            return 409, f"At least one active {self.role} account must remain"
+        return None
+
     @property
     def staff_verifies(self):
         """True when a Teacher/Admin verifies this account, False when Google sign-in does."""
