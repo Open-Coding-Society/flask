@@ -210,6 +210,7 @@ def main():
         check("the last active Teacher cannot be deactivated (409)", r.status_code == 409 and get("zz_teacher")["active"] is True,
               f"{r.status_code} {r.get_json()}")
     set_active("zz_admin2", True)
+    set_active("zz_teacher2", True)
 
     with app.app_context():  # accounts of their own, so the table checks above are unaffected
         for uid, role in (("zz_gone_admin", "Admin"), ("zz_gone_mentor", "Mentor"), ("zz_gone_mentor2", "Mentor"), ("zz_gone_mentor3", "Mentor")):
@@ -240,6 +241,29 @@ def main():
     r = table_delete("zz_admin", ids["zz_teacher"])
     check("the last active Teacher cannot be deleted (409)", r.status_code == 409 and exists("zz_teacher"), r.status_code)
     set_active("zz_teacher2", True)
+    # a deactivated Admin whose login session is still open has no rights
+    admin_browser = app.test_client()
+    admin_browser.post("/login", data={"username": "zz_admin2", "password": PASSWORD})
+    set_active("zz_admin2", False)
+    r = admin_browser.delete(f"/users/delete/{ids['zz_gone_mentor3']}")
+    check("a deactivated Admin's still-open session cannot delete (403)", r.status_code == 403 and exists("zz_gone_mentor3"), r.status_code)
+    set_active("zz_admin2", True)
+
+    # the must-keep roles come from the data (model/account_types.json), not from code
+    import copy
+    from unittest.mock import patch
+    from model import account_types
+    set_active("zz_admin2", False)
+    changed = copy.deepcopy(account_types._data)
+    changed["essential_roles"] = ["Mentor"]
+    with app.app_context():
+        sole_admin = User.query.filter_by(_uid="zz_admin").first()
+        protected_by_default = sole_admin.is_last_active_essential()
+        with patch.object(account_types, "_data", changed):
+            protected_when_changed = sole_admin.is_last_active_essential()
+    set_active("zz_admin2", True)
+    check("the protected roles follow the data: the only Admin is protected by default, not once the data drops Admin",
+          protected_by_default is True and protected_when_changed is False, f"{protected_by_default} {protected_when_changed}")
 
     # what the table offers
     html_t, _ = table("zz_teacher")
