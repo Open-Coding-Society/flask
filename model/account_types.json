@@ -1,5 +1,7 @@
 {
   "verification_interval_days": 365,
+  "default_verification_days": 30,
+  "verification_exempt_roles": ["Admin", "Teacher"],
   "default_account_type": "student",
   "account_types": {
     "student": {
@@ -10,7 +12,8 @@
     "mentor": {
       "role": "Mentor",
       "google_verified_domains": [],
-      "staff_created": true
+      "staff_created": true,
+      "verification_days": 365
     }
   }
 }
