@@ -40,6 +40,7 @@ from api.presence_api import presence_api
 # database Initialization functions
 from model.user import User, initUsers
 from model.user import Section;
+from model import account_types
 from model.github import GitHubUser
 from model.feedback import Feedback
 from api.analytics import get_date_range
@@ -195,7 +196,7 @@ def index():
 @login_required
 def u2table():
     users = User.query.all()
-    return render_template("u2table.html", user_data=users)
+    return render_template("u2table.html", user_data=users, role_options=account_types.assignable_roles())
 
 @app.route('/sections/')
 @login_required

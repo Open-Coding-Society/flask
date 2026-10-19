@@ -368,6 +368,23 @@ class User(db.Model, UserMixin):
             return 409, f"At least one active {self.role} account must remain"
         return None
 
+    def role_editable_by(self, actor):
+        """True when actor may change this account's role at all: not their own, and only an
+        Admin may change an Admin's. Whatever role the account has now."""
+        return self.id != actor.id and (actor.is_admin() or not self.is_admin())
+
+    def role_change_blocker(self, actor, new_role):
+        """None if actor may set this account's role to new_role, else (HTTP status, reason)."""
+        if new_role not in account_types.assignable_roles():
+            return 400, f"role must be one of: {', '.join(account_types.assignable_roles())}"
+        if self.id == actor.id:
+            return 403, "You cannot change your own role"
+        if not self.role_editable_by(actor) or (new_role == "Admin" and not actor.is_admin()):
+            return 403, "Only an Admin can change an Admin's role or make someone an Admin"
+        if new_role != self.role and self.is_last_active_essential():
+            return 409, f"At least one active {self.role} account must remain"
+        return None
+
     def deletion_blocker(self, actor):
         """None if actor may delete this account, else (HTTP status, reason)."""
         if not (actor.is_admin() and actor.active):

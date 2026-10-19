@@ -897,6 +897,23 @@ class UserAPI:
                 return {'message': blocker[1]}, blocker[0]
             return jsonify(_without_password(target.deactivate().read()))
 
+    class _ChangeRole(Resource):
+        """Teacher/Admin changes another account's role: POST {"role": "Mentor"}. Only an Admin can
+        make someone an Admin or change an Admin's role; nobody changes their own role."""
+        @token_required(["Teacher", "Admin"])
+        def post(self, uid):
+            target = User.query.filter_by(_uid=uid).first()
+            if target is None:
+                return {'message': f'User {uid} not found'}, 404
+            body = request.get_json(silent=True)
+            role = body.get('role') if isinstance(body, dict) else None
+            blocker = target.role_change_blocker(g.current_user, role)
+            if blocker:
+                return {'message': blocker[1]}, blocker[0]
+            target.role = role
+            db.session.commit()
+            return jsonify(_without_password(target.read()))
+
     class _AdminCreate(Resource):
         """Teacher/Admin creates an account of a staff-created type (see
         model/account_types.json). The account starts inactive and follows the same
@@ -930,6 +947,7 @@ class UserAPI:
     api.add_resource(_ResetPasswordVerified, '/reset-password')
     api.add_resource(_VerifyAccount, '/user/<string:uid>/verify')
     api.add_resource(_DeactivateAccount, '/user/<string:uid>/deactivate')
+    api.add_resource(_ChangeRole, '/user/<string:uid>/role')
     api.add_resource(_AdminCreate, '/user/admin-create')
     
     class _Class(Resource):
