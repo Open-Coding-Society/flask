@@ -129,8 +129,9 @@ def main():
     # ---- the two named properties -------------------------------------------------------------
     with app.app_context():
         u = lambda uid: User.query.filter_by(_uid=uid).first()
-        check("staff_verifies: true for a Mentor, false for a student (Google verifies students)",
-              u("zz_mentor").staff_verifies and not u("zz_student").staff_verifies)
+        check("verification_prompt_days: asked for a student (30), not for a Mentor (fixed) or an Admin (never re-verified)",
+              u("zz_student").verification_prompt_days == 30 and u("zz_mentor").verification_prompt_days is None
+              and u("zz_admin").verification_prompt_days is None)
         check("verification_due: false only when active and verified",
               not u("zz_mentor").verification_due and u("zz_mentor_lapsed").verification_due and u("zz_mentor_pending").verification_due)
 
@@ -156,10 +157,13 @@ def main():
     check("a Mentor whose verification lapsed gets Verify and Deactivate",
           actions(html, "zz_mentor_lapsed") == [("verify", "Verify"), ("deactivate", "Deactivate")], str(actions(html, "zz_mentor_lapsed")))
     check("an up-to-date Mentor gets Deactivate only", actions(html, "zz_mentor") == [("deactivate", "Deactivate")])
-    check("a student gets no Activate or Verify (Google does that), whatever their state",
-          all(a != "verify" for uid in ("zz_student", "zz_student_lapsed", "zz_student_pending") for a, _ in actions(html, uid)))
-    check("a pending student has no buttons; an active student can be deactivated",
-          actions(html, "zz_student_pending") == [] and actions(html, "zz_student") == [("deactivate", "Deactivate")])
+    check("students get Activate or Verify like any account: pending -> Activate, lapsed -> Verify and Deactivate, up to date -> Deactivate",
+          actions(html, "zz_student_pending") == [("verify", "Activate")]
+          and actions(html, "zz_student_lapsed") == [("verify", "Verify"), ("deactivate", "Deactivate")]
+          and actions(html, "zz_student") == [("deactivate", "Deactivate")])
+    prompt = lambda uid: re.search(r'data-action="verify"( data-prompt-days="(\d+)")?', row(html, uid))
+    check("the button asks for days (default 30) for a student, and not for a Mentor",
+          prompt("zz_student_pending").group(2) == "30" and prompt("zz_mentor_pending").group(2) is None)
     check("your own row has no Deactivate button", actions(html, "zz_teacher") == [])
     check("a Teacher does not get Delete or Reset Password",
           'delete-btn" data-id' not in html and 'reset-password-btn" data-id' not in html)
@@ -176,6 +180,75 @@ def main():
     check("each row carries its role and active state for the filters",
           states["zz_mentor"] == ("Mentor", "true") and states["zz_mentor_pending"] == ("Mentor", "false")
           and states["zz_student_pending"] == ("User", "false"), str(states))
+
+    # ---- how long an activation by a Teacher or Admin covers -----------------------------------
+    import copy
+    from unittest.mock import patch
+    from model import account_types
+    with app.app_context():  # accounts of their own, all inactive
+        for uid, role in (("zz_v_student", "User"), ("zz_v_student2", "User"), ("zz_v_mentor", "Mentor"),
+                          ("zz_v_teacher", "Teacher"), ("zz_v_bad", "User")):
+            db.session.add(User(name=uid, uid=uid, password=PASSWORD, role=role))
+        db.session.commit()
+    interval = account_types.verification_interval_days()
+
+    def days_left(uid):
+        with app.app_context():
+            u = User.query.filter_by(_uid=uid).first()
+            return None if u.last_verified is None else interval - (datetime.utcnow() - u.last_verified).total_seconds() / 86400
+
+    with app.test_client() as c:
+        login_api(c, "zz_teacher")
+        r = c.post("/api/user/zz_v_student/verify")
+        check("activating a student with no days covers the default (30)",
+              r.status_code == 200 and get("zz_v_student")["active"] and abs(days_left("zz_v_student") - 30) < 0.01, days_left("zz_v_student"))
+        r = c.post("/api/user/zz_v_student2/verify", json={"days": 10})
+        check("activating a student with days=10 covers 10 days and reads as verified",
+              r.status_code == 200 and abs(days_left("zz_v_student2") - 10) < 0.01 and get("zz_v_student2")["state"] == "active_verified")
+        check("a Teacher can grant up to the full interval",
+              c.post("/api/user/zz_v_student2/verify", json={"days": interval}).status_code == 200
+              and abs(days_left("zz_v_student2") - interval) < 0.01)
+        for bad in (0, interval + 1, -5, "x", 1.5, True, None):
+            r = c.post("/api/user/zz_v_bad/verify", json={"days": bad})
+            check(f"days={bad!r} is refused (400) and the account stays inactive",
+                  r.status_code == 400 and get("zz_v_bad")["active"] is False, r.status_code)
+        for odd in ([], [30], "30", 5):
+            r = c.post("/api/user/zz_v_bad/verify", json=odd)
+            check(f"a body that is not a JSON object ({odd!r}) is a 400, not a crash",
+                  r.status_code == 400 and get("zz_v_bad")["active"] is False, r.status_code)
+        r = c.post("/api/user/zz_v_mentor/verify", json={"days": 5})
+        check("a Mentor always gets the full 365 days; days in the request are ignored",
+              r.status_code == 200 and abs(days_left("zz_v_mentor") - 365) < 0.01, days_left("zz_v_mentor"))
+        r = c.post("/api/user/zz_v_teacher/verify")
+        check("a Teacher account can be activated too", r.status_code == 200 and get("zz_v_teacher")["active"] is True)
+    with app.app_context():
+        t = User.query.filter_by(_uid="zz_v_teacher").first()
+        t.last_verified = datetime.utcnow() - timedelta(days=900)
+        db.session.commit()
+    check("Teacher and Admin accounts never need re-verification, however old last_verified is",
+          get("zz_v_teacher")["state"] == "active_verified" and get("zz_admin")["state"] == "active_verified")
+
+    changed = copy.deepcopy(account_types._data)
+    changed["default_verification_days"] = 7
+    changed["verification_exempt_roles"] = ["Mentor"]
+    for t in changed["account_types"].values():
+        t.pop("verification_days", None)
+    with app.app_context():
+        db.session.add(User(name="zz_v_data", uid="zz_v_data", password=PASSWORD, role="User"))
+        db.session.commit()
+    with patch.object(account_types, "_data", changed):
+        with app.test_client() as c:
+            login_api(c, "zz_teacher")
+            c.post("/api/user/zz_v_data/verify")
+        with app.app_context():
+            u = User.query.filter_by(_uid="zz_v_data").first()
+            m = User.query.filter_by(_uid="zz_mentor").first()
+            seven = abs(interval - (datetime.utcnow() - u.last_verified).total_seconds() / 86400 - 7) < 0.01
+            m.last_verified = datetime.utcnow() - timedelta(days=900)
+            mentor_exempt = m.verification_state == "active_verified"
+            teacher_lapses = User.query.filter_by(_uid="zz_v_teacher").first().verification_state == "active_verification_required"
+    check("the numbers and the exempt roles come from the data: default 7 days, Mentor exempt, Teacher no longer exempt",
+          seven and mentor_exempt and teacher_lapses, f"{seven} {mentor_exempt} {teacher_lapses}")
 
     after = sha256(REAL_DB) if os.path.exists(REAL_DB) else None
     check("real dev DB untouched", real_before == after)

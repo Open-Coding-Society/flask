@@ -166,11 +166,9 @@ def main():
             r = c.post("/api/user/admin-create", json=dict(name="Staff Made", uid="zz_made_student",
                                                            password=PASSWORD, accountType="student"))
             check("admin-create does not create students", r.status_code == 400 and get("zz_made_student") is None)
-            before = get("zz_no_token")
             r = c.post("/api/user/zz_no_token/verify")
-            check("a Teacher cannot verify a student; they use Google sign-in",
-                  r.status_code == 400 and get("zz_no_token")["active"] == before["active"] is False,
-                  f"{r.status_code} {get('zz_no_token')}")
+            check("a Teacher can verify and activate a student",
+                  r.status_code == 200 and get("zz_no_token")["active"] is True, f"{r.status_code} {get('zz_no_token')}")
             for bad in ("teacher", "admin", ""):
                 r = c.post("/api/user/admin-create", json=dict(name="Bad Role", uid="zz_bad_" + (bad or "x"),
                                                                password=PASSWORD, accountType=bad))
