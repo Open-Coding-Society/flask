@@ -873,6 +873,15 @@ class UserAPI:
                 return {'message': 'This account is verified through Google sign-in, not by a Teacher or Admin'}, 400
             return jsonify(_without_password(target.activate().read()))
 
+    class _DeactivateAccount(Resource):
+        """Teacher/Admin marks an account inactive. The account and its data are kept."""
+        @token_required(["Teacher", "Admin"])
+        def post(self, uid):
+            target = User.query.filter_by(_uid=uid).first()
+            if target is None:
+                return {'message': f'User {uid} not found'}, 404
+            return jsonify(_without_password(target.deactivate().read()))
+
     class _AdminCreate(Resource):
         """Teacher/Admin creates an account of a staff-created type (see
         model/account_types.json). The account starts inactive and follows the same
@@ -905,6 +914,7 @@ class UserAPI:
     api.add_resource(_School, '/school')
     api.add_resource(_ResetPasswordVerified, '/reset-password')
     api.add_resource(_VerifyAccount, '/user/<string:uid>/verify')
+    api.add_resource(_DeactivateAccount, '/user/<string:uid>/deactivate')
     api.add_resource(_AdminCreate, '/user/admin-create')
     
     class _Class(Resource):

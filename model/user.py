@@ -340,6 +340,22 @@ class User(db.Model, UserMixin):
         db.session.commit()
         return self
     
+    def deactivate(self):
+        """Mark the account inactive. The account, its data and last_verified are kept."""
+        self.active = False
+        db.session.commit()
+        return self
+
+    @property
+    def staff_verifies(self):
+        """True when a Teacher/Admin verifies this account, False when Google sign-in does."""
+        return self.role not in account_types.oauth_roles()
+
+    @property
+    def verification_due(self):
+        """True while the account is inactive or its verification has lapsed."""
+        return self.verification_state != "active_verified"
+
     # getter method for profile picture
     @property
     def pfp(self):
