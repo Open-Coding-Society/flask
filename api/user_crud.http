@@ -6,6 +6,8 @@
 # @name createUser
 # @note Creates a real account in the selected environment and requests Kasm provisioning. Check testUid first.
 # dob is included from the example, but the current create endpoint ignores it.
+# accountType mentor creates an inactive Mentor, activated in step 1b. A student is not activated by staff:
+# a student becomes active when Google verifies their school email at sign-up.
 POST {{baseUrl}}/api/user
 Content-Type: application/json
 Accept: application/json
@@ -14,8 +16,15 @@ Accept: application/json
   "uid": "{{testUid}}",
   "name": "Wilma Flinstone",
   "dob": "1000-01-02",
+  "accountType": "mentor",
   "kasm_server_needed": true
 }
+
+### 1b. Activate the new Mentor (expect 200 and "active": true)
+# @name verifyUser
+# @note A new Mentor is inactive and gets 403 "Account pending verification" on protected endpoints until a Teacher or Admin verifies it.
+POST {{baseUrl}}/api/user/{{testUid}}/verify
+Accept: application/json
 
 ### 2. Read logged-in user from cookie (expect 200 and role Admin)
 # @name currentUser
