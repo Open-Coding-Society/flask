@@ -4,14 +4,18 @@ OCS changes data, not code.
 Each account type has:
   role                     the User role an account of this type is created with
   google_verified_domains  email domains Google can verify for this type. If set, the account
-                           is activated when Google verifies an email in one of them, and a
-                           Teacher/Admin does not verify it. If empty, the account is created
-                           inactive and a Teacher/Admin verifies it.
+                           is activated at sign-up when Google verifies an email in one of them.
+                           If empty, the account is created inactive until a Teacher/Admin
+                           activates it. A Teacher/Admin can activate any account.
   staff_created            whether a Teacher/Admin may create this type directly
-verification_interval_days is how long a verification stays current. default_account_type is
-used when a signup names no type, or one that is not listed. essential_roles are the roles of
-which at least one active account must always remain. staff_roles are the roles that manage
-accounts: they see the staff controls in the Account Administration screen.
+  verification_days        optional. How many days a Teacher/Admin's activation covers for this
+                           type (a Mentor's 365). Without it the Teacher/Admin is asked, and
+                           default_verification_days is the suggested answer.
+verification_interval_days is how long a verification stays current, and the most a Teacher/Admin
+can grant. verification_exempt_roles are never re-verified. default_account_type is used when a
+signup names no type, or one that is not listed. essential_roles are the roles of which at least
+one active account must always remain. staff_roles are the roles that manage accounts: they see
+the staff controls in the Account Administration screen.
 """
 import json
 import os
@@ -23,7 +27,8 @@ def _read():
         data = json.load(fh)
     if data["default_account_type"] not in data["account_types"]:
         raise ValueError("account_types.json: default_account_type is not a listed account type")
-    for key in ("essential_roles", "staff_roles"):
+    for key in ("verification_interval_days", "default_verification_days", "verification_exempt_roles",
+                "essential_roles", "staff_roles"):
         if key not in data:
             raise ValueError(f"account_types.json: {key} is missing")
     return data
@@ -38,9 +43,26 @@ def get(name):
     return types.get((name or "").lower()) or types[_data["default_account_type"]]
 
 
-def oauth_roles():
-    """Roles whose accounts are verified through Google, not by a Teacher or Admin."""
-    return {t["role"] for t in _data["account_types"].values() if t["google_verified_domains"]}
+def verification_exempt_roles():
+    """Roles that are never re-verified: they do not need annual verification."""
+    return tuple(_data["verification_exempt_roles"])
+
+
+def default_verification_days():
+    """The suggested number of days when a Teacher/Admin is asked how long to verify for."""
+    return _data["default_verification_days"]
+
+
+def fixed_verification_days(role):
+    """The days a Teacher/Admin's activation covers for this role when it is not their choice:
+    the whole interval for a role that is never re-verified, or the account type's own number.
+    None means the Teacher/Admin chooses."""
+    if role in verification_exempt_roles():
+        return verification_interval_days()
+    for account_type in _data["account_types"].values():
+        if account_type["role"] == role and account_type.get("verification_days"):
+            return account_type["verification_days"]
+    return None
 
 
 def staff_created():
