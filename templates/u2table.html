@@ -82,8 +82,8 @@
                 <td>
                     <button class="btn btn-primary edit-btn" data-id="{{ user.id }}">Edit</button>
                     {% if is_staff %}
-                    {% if user.staff_verifies and user.verification_due %}
-                    <button class="btn btn-success status-btn" data-uid="{{ user.uid }}" data-action="verify">{{ 'Verify' if user.active else 'Activate' }}</button>
+                    {% if user.verification_due %}
+                    <button class="btn btn-success status-btn" data-uid="{{ user.uid }}" data-action="verify"{% if user.verification_prompt_days %} data-prompt-days="{{ user.verification_prompt_days }}"{% endif %}>{{ 'Verify' if user.active else 'Activate' }}</button>
                     {% endif %}
                     {% if user.active and user.id != current_user.id %}
                     <button class="btn btn-secondary status-btn" data-uid="{{ user.uid }}" data-action="deactivate">Deactivate</button>
@@ -216,7 +216,14 @@
             button.addEventListener("click", function () {
                 const { uid, action } = this.dataset;
                 if (action === "deactivate" && !confirm(`Deactivate ${uid}? They will be blocked until verified again.`)) return;
-                fetch(`/api/user/${uid}/${action}`, { method: "POST" })
+                const request = { method: "POST" };
+                if (this.dataset.promptDays) {  // the number of days is the Teacher's or Admin's to choose
+                    const answer = prompt(`Verify ${uid} for how many days?`, this.dataset.promptDays);
+                    if (answer === null) return;
+                    request.headers = { "Content-Type": "application/json" };
+                    request.body = JSON.stringify({ days: Number(answer) });
+                }
+                fetch(`/api/user/${uid}/${action}`, request)
                     .then(response => response.json().then(data => ({ ok: response.ok, data })))
                     .then(({ ok, data }) => {
                         if (!ok) throw new Error(data.message || "Request failed");
