@@ -377,7 +377,11 @@ class UserAPI:
             # bad request
             if user is None:
                 return {'message': f'User {uid} not found'}, 404
-           
+
+            blocker = user.deletion_blocker(g.current_user)
+            if blocker:
+                return {'message': blocker[1]}, blocker[0]
+
             # Read and then Delete the User object using custom methods
             user_json = _without_password(user.read())
             user.delete()
@@ -880,6 +884,9 @@ class UserAPI:
             target = User.query.filter_by(_uid=uid).first()
             if target is None:
                 return {'message': f'User {uid} not found'}, 404
+            blocker = target.deactivation_blocker(g.current_user)
+            if blocker:
+                return {'message': blocker[1]}, blocker[0]
             return jsonify(_without_password(target.deactivate().read()))
 
     class _AdminCreate(Resource):
