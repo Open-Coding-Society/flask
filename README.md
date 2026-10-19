@@ -94,10 +94,6 @@ pip install -r requirements.txt
   GITHUB_TOKEN=ghp_xxx
   GITHUB_TARGET_TYPE=user  # Use 'organization' or 'user'
   GITHUB_TARGET_NAME=Open-Coding-Society
-  # KASM Configuration (server is defaulted)
-  KASM_SERVER=https://kasm.opencodingsociety.com
-  KASM_API_KEY_SECRET=xxxx
-  KASM_API_KEY=xxx
   # DB Configuration, AWS RDS
   IS_PRODUCTION=false # false = LOCAL true = DEPLOYED
   DB_USERNAME='admin'
@@ -177,8 +173,6 @@ Admin runs step 1b. A student is not activated by staff: a student account becom
 active when Google verifies their school email at sign-up, so a student created
 without that token stays inactive. The example
 retains `dob`, but the create endpoint currently ignores it.
-`kasm_server_needed: true` requests Kasm provisioning; change it to `false`
-if you only want to exercise user CRUD without requesting a server.
 
 These are manual checks, not automated assertions. REST Client does not run
 all requests as an automated test sequence; a runner such as pytest or
