@@ -329,14 +329,19 @@ class User(db.Model, UserMixin):
     def verification_state(self):
         if not self.active:
             return "inactive"
+        if self.role in account_types.verification_exempt_roles():
+            return "active_verified"  # never re-verified
         if self.last_verified is None or datetime.utcnow() - self.last_verified >= timedelta(days=account_types.verification_interval_days()):
             return "active_verification_required"
         return "active_verified"
 
-    def activate(self):
-        """Verify the account: mark it active and record when."""
+    def activate(self, days=None):
+        """Verify the account: mark it active and record when. days is how long the verification
+        should last, up to the full interval; without it, the full interval."""
+        interval = account_types.verification_interval_days()
+        used = interval if days is None else min(days, interval)
         self.active = True
-        self.last_verified = datetime.utcnow()
+        self.last_verified = datetime.utcnow() - timedelta(days=interval - used)
         db.session.commit()
         return self
     
@@ -347,14 +352,17 @@ class User(db.Model, UserMixin):
         return self
 
     @property
-    def staff_verifies(self):
-        """True when a Teacher/Admin verifies this account, False when Google sign-in does."""
-        return self.role not in account_types.oauth_roles()
-
-    @property
     def verification_due(self):
         """True while the account is inactive or its verification has lapsed."""
         return self.verification_state != "active_verified"
+
+    @property
+    def verification_prompt_days(self):
+        """The suggested days to ask a Teacher/Admin for when they activate this account, or None
+        when the answer is not theirs to choose (a fixed period, or a role never re-verified)."""
+        if account_types.fixed_verification_days(self.role) is not None:
+            return None
+        return account_types.default_verification_days()
 
     # getter method for profile picture
     @property
