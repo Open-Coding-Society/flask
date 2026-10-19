@@ -173,9 +173,10 @@ Updating another user and deleting users require Admin access.
 
 New accounts start inactive. The example creates a Mentor, which stays inactive
 (403 "Account pending verification" on protected endpoints) until a Teacher or
-Admin runs step 1b. A student is not activated by staff: a student account becomes
-active when Google verifies their school email at sign-up, so a student created
-without that token stays inactive. The example
+Admin runs step 1b. A Teacher or Admin can activate any account, a student included;
+a student is also activated on their own when Google verifies their school email at
+sign-up. Activating a Mentor covers the full 365 days; for other accounts a body of
+`{"days": N}` sets how long (30 by default). The example
 retains `dob`, but the create endpoint currently ignores it.
 `kasm_server_needed: true` requests Kasm provisioning; change it to `false`
 if you only want to exercise user CRUD without requesting a server.
