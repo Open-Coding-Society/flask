@@ -82,3 +82,9 @@ def essential_roles():
 def staff_roles():
     """Roles that manage accounts."""
     return tuple(_data["staff_roles"])
+
+
+def assignable_roles():
+    """Every role an account can be given: the account types' roles, then the staff roles."""
+    roles = [t["role"] for t in _data["account_types"].values()]
+    return tuple(roles + [r for r in _data["staff_roles"] if r not in roles])
