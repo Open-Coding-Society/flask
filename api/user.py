@@ -214,8 +214,6 @@ class UserAPI:
                 cleaned_body['sid'] = body.get('sid')
             if body.get('school'):
                 cleaned_body['school'] = body.get('school')
-            if body.get('kasm_server_needed') is not None:
-                cleaned_body['kasm_server_needed'] = body.get('kasm_server_needed')
             # Support assigning classes (e.g. ["CSSE","CSP","CSA"]).
             # Accept either a list or a single string.
             if body.get('class') is not None:
@@ -803,7 +801,6 @@ class UserAPI:
                 'email': email,
                 'sid': sid,
                 'school': school,
-                'kasm_server_needed': False
             }
             if body.get('class') is not None:
                 cleaned_body['class'] = body.get('class')

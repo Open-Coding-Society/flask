@@ -88,7 +88,6 @@ Content-Type: application/json
   "uid": "wilma",
   "name": "Wilma Flintstone",
   "accountType": "student",
-  "kasm_server_needed": true,
   "email": "wilma@example.com"
 }
 

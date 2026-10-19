@@ -10,7 +10,6 @@ import json
 from __init__ import app, db
 from model import account_types
 from model.github import GitHubUser
-from model.kasm import KasmUser
 
 """ Helper Functions """
 
@@ -137,7 +136,6 @@ class User(db.Model, UserMixin):
         _password (Column): A string representing the hashed password of the user. It is not unique and cannot be null.
         _role (Column): A string representing the user's role within the application. Defaults to "User".
         _pfp (Column): A string representing the path to the user's profile picture. It can be null.
-        kasm_server_needed (Column): A boolean indicating whether the user requires a Kasm server.
         sections (Relationship): A many-to-many relationship between users and sections, allowing users to be associated with multiple sections.
         _grade_data (Column): A JSON object representing the user's grade data.
         _ap_exam (Column): A JSON object representing the user's AP exam data.
@@ -153,7 +151,6 @@ class User(db.Model, UserMixin):
     _password = db.Column(db.String(255), unique=False, nullable=False)
     _role = db.Column(db.String(20), default="User", nullable=False)
     _pfp = db.Column(db.String(255), unique=False, nullable=True)
-    kasm_server_needed = db.Column(db.Boolean, default=False)
     _grade_data = db.Column(db.JSON, unique=False, nullable=True)
     _ap_exam = db.Column(db.JSON, unique=False, nullable=True)
     _class = db.Column(db.JSON, unique=False, nullable=True)
@@ -186,13 +183,12 @@ class User(db.Model, UserMixin):
     personas = db.relationship('Persona', secondary='user_personas', lazy='subquery',
                                overlaps="user_personas_rel,persona,users")
     
-    def __init__(self, name, uid, password=app.config["DEFAULT_PASSWORD"], kasm_server_needed=False, role="User", pfp='', grade_data=None, ap_exam=None, school="Unknown", sid=None, classes=None, game_profile=None):
+    def __init__(self, name, uid, password=app.config["DEFAULT_PASSWORD"], role="User", pfp='', grade_data=None, ap_exam=None, school="Unknown", sid=None, classes=None, game_profile=None):
         self._name = name
         self._uid = uid
         self._email = "?"
         self._sid = sid
         self.set_password(password)
-        self.kasm_server_needed = kasm_server_needed
         self._role = role
         self._pfp = pfp
         self._grade_data = grade_data if grade_data else {}
@@ -515,7 +511,6 @@ class User(db.Model, UserMixin):
             "role": self.role,
             "pfp": self.pfp,
             "class": self._class if self._class is not None else [],
-            "kasm_server_needed": self.kasm_server_needed,
             "grade_data": self.grade_data,
             "ap_exam": self.ap_exam,
             "password": self._password,  # Only for internal use, not for API
@@ -543,15 +538,10 @@ class User(db.Model, UserMixin):
         sid = inputs.get("sid", "")
         password = inputs.get("password", "")
         pfp = inputs.get("pfp", None)
-        kasm_server_needed = inputs.get("kasm_server_needed", None)
         grade_data = inputs.get("grade_data", None)
         ap_exam = inputs.get("ap_exam", None)
         class_list = inputs.get("class", None) or inputs.get("_class", None)
         school = inputs.get("school", None)
-        # States before update
-        old_uid = self.uid
-        old_kasm_server_needed = self.kasm_server_needed
-
         # Update table with new data
         if name:
             self.name = name
@@ -565,8 +555,6 @@ class User(db.Model, UserMixin):
             self.set_password(password)
         if pfp is not None:
             self.pfp = pfp
-        if kasm_server_needed is not None:
-            self.kasm_server_needed = bool(kasm_server_needed)
         if grade_data is not None:
             self.grade_data = grade_data
         if ap_exam is not None:
@@ -588,28 +576,6 @@ class User(db.Model, UserMixin):
             if email == "?":
                 self.set_email()
 
-        # Make a KasmUser object to interact with the Kasm API
-        # Wrap in try-except to ensure db.session.commit() occurs even if Kasm operations fail
-        try:
-            kasm_user = KasmUser()
-
-            # Update Kasm server group membership if needed
-            if self.kasm_server_needed:
-                # UID has changed, delete old Kasm user if it exists
-                if old_uid != self.uid:
-                    kasm_user.delete(old_uid)
-                # Create or update the user in Kasm, including a password
-                kasm_user.post(self.name, self.uid, password if password else app.config["DEFAULT_PASSWORD"])
-                # User is transtioning from non-Kasm to Kasm user, thus it requires posting all groups to Kasm
-                if not old_kasm_server_needed:
-                    kasm_user.post_groups(self.uid, [section.abbreviation for section in self.sections])
-            # User is transitioning from Kasm user to non-Kasm user, thus it requires cleanup of defunct Kasm user
-            elif old_kasm_server_needed:
-                kasm_user.delete(self.uid)
-        except Exception as e:
-            # Log the error but continue to db.session.commit()
-            print(f"Kasm API error for user {self.uid}: {e}")
-
         try:
             db.session.commit()
         except IntegrityError:
@@ -621,7 +587,6 @@ class User(db.Model, UserMixin):
     # None
     def delete(self):
         try:
-            KasmUser().delete(self.uid)
             db.session.delete(self)
             db.session.commit()
         except IntegrityError:
@@ -661,9 +626,6 @@ class User(db.Model, UserMixin):
         else:
             # Handle the case where the section exists
             print("Section with abbreviation '{}' exists.".format(section._abbreviation))
-        # update kasm group membership
-        if self.kasm_server_needed:
-            KasmUser().post_groups(self.uid, [section.abbreviation])
         return self
     
     def add_sections(self, sections):
@@ -829,7 +791,7 @@ def initUsers():
             'last_updated': None
         }
 
-        u1 = User(name=app.config['ADMIN_USER'], uid=app.config['ADMIN_UID'], password=app.config['ADMIN_PASSWORD'], pfp=app.config['ADMIN_PFP'], kasm_server_needed=True, role="Admin")
+        u1 = User(name=app.config['ADMIN_USER'], uid=app.config['ADMIN_UID'], password=app.config['ADMIN_PASSWORD'], pfp=app.config['ADMIN_PFP'], role="Admin")
         u2 = User(name=app.config['USER_NAME'], uid=app.config['USER_UID'], password=app.config['USER_PASSWORD'], pfp=app.config['USER_PFP'])
         u3 = User(name=app.config['TEACHER_USER'], uid=app.config['TEACHER_UID'], pfp=app.config['TEACHER_PFP'], password=app.config['TEACHER_PASSWORD'], role='Teacher')
         u4 = User(name=app.config['MY_NAME'], uid=app.config['MY_UID'], pfp=app.config['MY_PFP'], password=app.config['MY_PASSWORD'], role=app.config['MY_ROLE'])

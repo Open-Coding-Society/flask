@@ -4,7 +4,7 @@
 
 ### 1. Create user (expect 200)
 # @name createUser
-# @note Creates a real account in the selected environment and requests Kasm provisioning. Check testUid first.
+# @note Creates a real account in the selected environment. Check testUid first.
 # dob is included from the example, but the current create endpoint ignores it.
 # accountType mentor creates an inactive Mentor, activated in step 1b. A student is not activated by staff:
 # a student becomes active when Google verifies their school email at sign-up.
@@ -16,8 +16,7 @@ Accept: application/json
   "uid": "{{testUid}}",
   "name": "Wilma Flinstone",
   "dob": "1000-01-02",
-  "accountType": "mentor",
-  "kasm_server_needed": true
+  "accountType": "mentor"
 }
 
 ### 1b. Activate the new Mentor (expect 200 and "active": true)

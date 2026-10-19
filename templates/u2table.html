@@ -35,7 +35,6 @@
                 <th>Role</th>
                 <th>Status</th>
                 <th>Profile Picture</th>
-                <th>Kasm Server Needed</th>
                 <th>Courses</th>
                 <th>Commits</th>
                 <th>Actions</th>
@@ -72,7 +71,6 @@
                          style="width: 50px; height: 50px;">
                     {% endif %}
                 </td>
-                <td id="kasm-{{ user.id }}">{{ user.kasm_server_needed }}</td>
                 <td>
                     {% for section in user.sections %}
                     {{ section.abbreviation }}{% if not loop.last %}, {% endif %}
