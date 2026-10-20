@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 # import "objects" from "this" project
 from __init__ import app, db, login_manager  # Key Flask objects 
 from model.persona import Persona, initPersonas, initPersonaUsers
+from model.presence_schedule import seed_schedules
 # API endpoints
 from api.user import user_api 
 from api.python_exec_api import python_exec_api
@@ -369,6 +370,7 @@ def generate_data():
     initMicroblogs()
     initPersonas()
     initPersonaUsers()
+    seed_schedules()  # presence schedules from model/presence_schedules.json
 
 # Register the custom command group with the Flask application
 app.cli.add_command(custom_cli)

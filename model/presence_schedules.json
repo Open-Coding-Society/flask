@@ -1,0 +1,22 @@
+{
+  "_comment": "Seed schedules for the presence system, loaded by model/presence_schedule.py seed_schedules() when no schedules exist yet. After that, edit schedules through /api/presence/schedules. Times are local (HH:MM, 24-hour) in the schedule's timezone; null timezone means America/Los_Angeles. Source for Del Norte: https://delnorte.powayusd.com/apps/bell_schedules/ (regular weeks only; special days go in schedule overrides). The 300-second grace is a reasonable default, not an official tardy policy.",
+  "schedules": [
+    {
+      "name": "Del Norte Regular",
+      "timezone": null,
+      "grace_seconds": 300,
+      "blocks": [
+        {"name": "Period 1", "weekdays": "mon,tue,thu,fri", "start": "08:35", "end": "09:41"},
+        {"name": "Period 2", "weekdays": "mon,tue,thu,fri", "start": "09:46", "end": "10:55"},
+        {"name": "Period 3", "weekdays": "mon,tue,thu,fri", "start": "11:37", "end": "12:43"},
+        {"name": "Period 4", "weekdays": "mon,tue,thu,fri", "start": "13:18", "end": "14:24"},
+        {"name": "Period 5", "weekdays": "mon,tue,thu,fri", "start": "14:29", "end": "15:35"},
+        {"name": "Period 1", "weekdays": "wed", "start": "09:35", "end": "10:34"},
+        {"name": "Period 2", "weekdays": "wed", "start": "10:39", "end": "11:38"},
+        {"name": "Period 3", "weekdays": "wed", "start": "11:53", "end": "12:57"},
+        {"name": "Period 4", "weekdays": "wed", "start": "13:32", "end": "14:31"},
+        {"name": "Period 5", "weekdays": "wed", "start": "14:36", "end": "15:35"}
+      ]
+    }
+  ]
+}

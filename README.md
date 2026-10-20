@@ -98,6 +98,12 @@ pip install -r requirements.txt
   KASM_SERVER=https://kasm.opencodingsociety.com
   KASM_API_KEY_SECRET=xxxx
   KASM_API_KEY=xxx
+  # Presence system (RFID tap readers), see api/presence.http
+  # Required on any server readers post to; readers send it as the X-API-Key header.
+  # Generate one: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+  RFID_API_KEY=xxxxx
+  # Optional: true once the camera posts face-check results (default false = "RFID only")
+  CAMERA_ENABLED=false
   # DB Configuration, AWS RDS
   IS_PRODUCTION=false # false = LOCAL true = DEPLOYED
   DB_USERNAME='admin'
@@ -151,6 +157,16 @@ REST Client does not read Python's `app.config` directly. If you change
 `FLASK_PORT` in `.env`, also update the localhost URL in the shared settings.
 Keep credentials out of these version-controlled settings; use the request
 prompts instead.
+
+#### Presence system sequence
+
+Open [api/presence.http](api/presence.http). It walks through the presence
+system top to bottom: authenticate as an Admin or Teacher, create a room and a
+schedule, register a tag, start a manual period, send taps as a reader would
+(including a duplicate and a bad key), and read the room's status. Reader
+requests prompt for the `RFID_API_KEY`; keep it out of the file. A fresh
+database needs `db.create_all()` (or `./scripts/db_init.py` locally), and
+`seed_schedules()` loads the starter schedule from `model/presence_schedules.json`.
 
 #### Manual user CRUD sequence
 
@@ -342,6 +358,14 @@ safe, and it is the only order in which the pull can verify itself.
 `sections`, `users`, `topics`, `microblogs`, `posts`, `classrooms`, `feedback`, `study`,
 `personas`, `user_personas`, `leaderboard`, `elementary_leaderboard`, `skill_snapshots`,
 plus the `user_sections` and `classroom_students` association rows.
+
+The presence system's tables travel together as one `presence` bundle
+(`/api/export/presence`, `/api/export/import/presence`, built in
+`model/presence_backup.py`): `presence_schedules`, `presence_schedule_blocks`,
+`presence_schedule_overrides`, `presence_rooms` (with `presence_room_members`),
+`rfid_tags`, `presence_periods`, `presence_events`, and `camera_checks`. Rows are matched
+by uid, room and schedule name, and event id, so a rebuild with new ids keeps every
+tag, period, and tap.
 
 **Adding a new model?** It must be added in three places or its data is lost on the next
 migration: `MIGRATED_MODELS` plus export/import endpoints in

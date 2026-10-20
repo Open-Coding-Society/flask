@@ -1,32 +1,32 @@
 """
-Presence API — one input-agnostic endpoint that every presence signal
-(RFID tap, camera result) posts to, plus the period logic that turns those
-events into attendance.
+Presence API: one input-agnostic endpoint that every presence signal (RFID
+tap, camera result) posts to, plus rooms, schedules, and the period logic
+that turns those events into presence states. Generic on purpose: a room can
+be a classroom, a club meeting, or an event.
 
 Devices authenticate with the shared X-API-Key (RFID_API_KEY), the same
-device-to-server pattern as the original /api/rfid/scan, which is now a
-thin wrapper around record_event() below. Teacher/admin actions use the
-normal OCS login.
+device-to-server pattern as /api/rfid/scan, which is a thin wrapper around
+record_event() below. Admin/Teacher actions use the normal OCS login.
 
 RFID tap body:
     {
       "event_id": "<uuid from the device>",     # retries with the same id are not logged twice
       "source": "rfid",
-      "classroom_id": 1,
+      "room_id": 1,
       "occurred_at": "2026-10-05T18:42:07.123Z",  # must include Z or an offset
       "tag_uid": "...",
-      "device_id": "crowpi-room1"               # optional
+      "device_id": "pi4-room1"                  # optional
     }
 
-The server derives the tap type: 'enter'/'exit' toggle per user,
-classroom, and period (so it resets every period instead of carrying
-over), or 'ignored' if occurred_at falls outside every period window.
+The server derives the tap type: 'enter'/'exit' toggle per user, room, and
+period (so it resets every period instead of carrying over), or 'ignored' if
+occurred_at falls outside every period window of that room.
 
 Camera result body (the camera's answer for one tap, see Jarvis3000#17):
     {
       "event_id": "<uuid for this result>",
       "source": "camera",
-      "classroom_id": 1,
+      "room_id": 1,
       "tap_event_id": "<event_id of the tap it answers>",
       "occurred_at": "<when the picture was taken>",
       "result": "match" | "no_match" | "no_face" | "not_enrolled",
@@ -35,28 +35,34 @@ Camera result body (the camera's answer for one tap, see Jarvis3000#17):
       "device_id": "door-cam"                   # optional
     }
 
-The camera finds taps to answer by polling
-GET /api/presence/classrooms/<id>/taps/pending.
+The camera finds taps to answer by polling GET /api/presence/rooms/<id>/taps/pending.
+
+Every response under /api/presence is JSON, errors included (see json_errors).
+Requests and expected results: api/presence.http.
 """
 
 import os
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, current_app, jsonify, request
+from flask_restful import Api, Resource
 from sqlalchemy.exc import IntegrityError
 
 from __init__ import db
 from api.authorize import token_required
-from model import bell_schedule
-from model.attendance import RfidTag
-from model.classroom import Classroom
-from model.presence import CameraCheck, PresenceEvent, PresencePeriod, to_iso_z, utc_now
+from model.presence import (CameraCheck, PresenceEvent, PresencePeriod, PresenceRoom,
+                            presence_room_members, to_iso_z, utc_now)
+from model.presence_schedule import (PresenceSchedule, PresenceScheduleOverride, ScheduleError,
+                                     check_timezone, parse_date, scheduled_block_at)
+from model.rfid_tag import RfidTag
 from model.user import User
 
 presence_api = Blueprint('presence_api', __name__, url_prefix='/api/presence')
+api = Api(presence_api)
 
 DEVICE_API_KEY = os.environ.get("RFID_API_KEY", "")
+STAFF = ["Admin", "Teacher"]
 SOURCES = {"rfid", "camera"}
 SUPPORTED_SOURCES = {"rfid"}  # taps; camera results go through record_camera_result()
 # A device clock running ahead of the server by more than this is treated
@@ -71,17 +77,6 @@ CAMERA_WINDOW = timedelta(seconds=15)
 CAMERA_ENABLED = os.environ.get("CAMERA_ENABLED", "").strip().lower() in ("1", "true", "yes")
 
 
-def require_device_api_key(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if not DEVICE_API_KEY:
-            return jsonify({"message": "RFID_API_KEY not configured on server"}), 500
-        if request.headers.get('X-API-Key', '') != DEVICE_API_KEY:
-            return jsonify({"message": "Invalid or missing API key"}), 401
-        return func(*args, **kwargs)
-    return wrapper
-
-
 class PresenceError(Exception):
     def __init__(self, message, status_code=400, **extra):
         super().__init__(message)
@@ -90,7 +85,49 @@ class PresenceError(Exception):
         self.extra = extra
 
     def response(self):
-        return jsonify({"message": self.message, **self.extra}), self.status_code
+        return {"message": self.message, **self.extra}, self.status_code
+
+
+def json_errors(func):
+    """Turns every failure inside a presence/RFID endpoint into a JSON body,
+    so a device or the dashboard gets a readable message instead of an HTML
+    error page (e.g. on a server whose presence tables were not created yet)."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except PresenceError as e:
+            return e.response()
+        except ScheduleError as e:
+            return {"message": str(e)}, 400
+        except Exception as e:  # noqa: BLE001 - last resort, logged with the traceback
+            db.session.rollback()
+            current_app.logger.exception("presence API error")
+            return {"message": "Server error in the presence API", "error": f"{type(e).__name__}: {e}"[:300]}, 500
+    return wrapper
+
+
+class PresenceResource(Resource):
+    """Base for every presence/RFID resource: JSON errors on all methods."""
+    method_decorators = [json_errors]
+
+
+def require_device_api_key(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if not DEVICE_API_KEY:
+            return {"message": "RFID_API_KEY not configured on server"}, 500
+        if request.headers.get('X-API-Key', '') != DEVICE_API_KEY:
+            return {"message": "Invalid or missing API key"}, 401
+        return func(*args, **kwargs)
+    return wrapper
+
+
+def json_body():
+    data = request.get_json(force=True, silent=True)
+    if not isinstance(data, dict):
+        raise PresenceError("JSON object body required")
+    return data
 
 
 def require_event_id(data):
@@ -100,11 +137,25 @@ def require_event_id(data):
     return event_id
 
 
-def require_classroom(data):
-    classroom_id = data.get("classroom_id")
-    if not isinstance(classroom_id, int) or not Classroom.query.get(classroom_id):
-        raise PresenceError(f"no classroom {classroom_id}", 404)
-    return classroom_id
+def get_room(room_id):
+    room = PresenceRoom.query.get(room_id) if isinstance(room_id, int) and not isinstance(room_id, bool) else None
+    if not room:
+        raise PresenceError(f"no room {room_id}", 404)
+    return room
+
+
+def get_schedule(schedule_id):
+    schedule = PresenceSchedule.query.get(schedule_id) if isinstance(schedule_id, int) else None
+    if not schedule:
+        raise PresenceError(f"no schedule {schedule_id}", 404)
+    return schedule
+
+
+def get_user(uid):
+    user = User.query.filter_by(_uid=str(uid or "").strip()).first()
+    if not user:
+        raise PresenceError(f"no user with uid {uid}", 404, status="unregistered")
+    return user
 
 
 def parse_occurred_at(value):
@@ -121,59 +172,68 @@ def parse_occurred_at(value):
     return dt.astimezone(timezone.utc).replace(tzinfo=None)
 
 
-def manual_period_at(dt):
+# ---------------------------------------------------------------- periods
+
+def manual_period_at(room, dt):
     manual = (
-        PresencePeriod.query.filter(PresencePeriod._source == "manual", PresencePeriod._start_time <= dt)
-        .order_by(PresencePeriod._start_time.desc())
+        PresencePeriod.query.filter(PresencePeriod._room_id == room.id, PresencePeriod._source == "manual",
+                                    PresencePeriod._start_time <= dt)
+        # Two periods started in the same second (e.g. a double-clicked Start)
+        # share a start_time; the newer one wins, matching current_period().
+        .order_by(PresencePeriod._start_time.desc(), PresencePeriod.id.desc())
         .first()
     )
     return manual if manual and manual.contains(dt) else None
 
 
-def period_at(dt):
-    """The period whose window contains dt (naive UTC). A manually started
-    period wins while it runs, so a teacher who starts one (e.g. for a demo
-    during passing time) knows taps will count; otherwise the bell schedule.
-    Bell periods are stored the first time they are needed so events can
-    reference them."""
-    manual = manual_period_at(dt)
+def period_at(room, dt):
+    """The room's period whose window contains dt (naive UTC). A manually
+    started period wins while it runs, so someone who starts one (e.g. for a
+    demo during passing time) knows taps will count; otherwise the room's
+    schedule. Scheduled periods are stored the first time they are needed so
+    events can reference them."""
+    manual = manual_period_at(room, dt)
     if manual:
         return manual
 
-    bell = bell_schedule.get_bell_period(dt)
-    if bell:
-        name, start_utc, end_utc = bell
-        period = PresencePeriod.query.filter_by(_source="bell", _name=name, _start_time=start_utc).first()
-        if not period:
-            period = PresencePeriod(
-                name=name,
-                start_time=start_utc,
-                duration_seconds=int((end_utc - start_utc).total_seconds()),
-                grace_seconds=bell_schedule.DEFAULT_GRACE_SECONDS,
-                source="bell",
-            )
-            db.session.add(period)
-            db.session.commit()
-        return period
+    scheduled = scheduled_block_at(room, dt)
+    if not scheduled:
+        return None
+    schedule, block, start_utc, end_utc = scheduled
+    period = PresencePeriod.query.filter_by(_room_id=room.id, _source="scheduled",
+                                            _name=block.name, _start_time=start_utc).first()
+    if not period:
+        period = PresencePeriod(
+            room_id=room.id,
+            name=block.name,
+            start_time=start_utc,
+            duration_seconds=int((end_utc - start_utc).total_seconds()),
+            grace_seconds=schedule.grace_seconds,
+            source="scheduled",
+        )
+        db.session.add(period)
+        db.session.commit()
+    return period
 
-    return None
 
-
-def current_period(now):
-    """The period a dashboard should show right now: a running manual
-    period, else the live bell period, else the most recently started
-    manual period (kept after it ends so final states stay visible)."""
+def current_period(room, now):
+    """The period a dashboard should show right now for this room: a running
+    manual period, else the live scheduled period, else the room's most
+    recently started manual period (kept after it ends so final states stay
+    visible)."""
     latest_manual = (
-        PresencePeriod.query.filter_by(_source="manual", _active=True)
+        PresencePeriod.query.filter_by(_room_id=room.id, _source="manual", _active=True)
         .order_by(PresencePeriod.id.desc())
         .first()
     )
     if latest_manual and latest_manual.contains(now):
         return latest_manual
-    if bell_schedule.get_bell_period(now):
-        return period_at(now)
+    if scheduled_block_at(room, now):
+        return period_at(room, now)
     return latest_manual
 
+
+# ---------------------------------------------------------------- events
 
 def resolve_user(source, data):
     if source == "rfid":
@@ -188,10 +248,7 @@ def resolve_user(source, data):
     uid = str(data.get("uid") or "").strip()
     if not uid:
         raise PresenceError(f"uid required for source {source}")
-    user = User.query.filter_by(_uid=uid).first()
-    if not user:
-        raise PresenceError(f"no user with uid {uid}", 404, status="unregistered")
-    return user, None
+    return get_user(uid), None
 
 
 def record_event(data):
@@ -210,7 +267,7 @@ def record_event(data):
     if source not in SUPPORTED_SOURCES:
         raise PresenceError(f"source {source} is not supported yet")
 
-    classroom_id = require_classroom(data)
+    room = get_room(data.get("room_id"))
 
     occurred_at = parse_occurred_at(data.get("occurred_at"))
     adjusted = False
@@ -220,12 +277,12 @@ def record_event(data):
 
     user, tag_uid = resolve_user(source, data)
 
-    period = period_at(occurred_at)
+    period = period_at(room, occurred_at)
     if period:
         last_event = (
             PresenceEvent.query.filter(
                 PresenceEvent._user_id == user.id,
-                PresenceEvent._classroom_id == classroom_id,
+                PresenceEvent._room_id == room.id,
                 PresenceEvent._period_id == period.id,
                 PresenceEvent._type.in_(["enter", "exit"]),
                 PresenceEvent._occurred_at <= occurred_at,
@@ -242,7 +299,7 @@ def record_event(data):
         event_id=event_id,
         source=source,
         user_id=user.id,
-        classroom_id=classroom_id,
+        room_id=room.id,
         period_id=period.id if period else None,
         type=event_type,
         occurred_at=occurred_at,
@@ -276,7 +333,7 @@ def record_camera_result(data):
     if existing:
         return {"status": "accepted", "duplicate": True, "check": existing.to_dict()}, 200
 
-    classroom_id = require_classroom(data)
+    room = get_room(data.get("room_id"))
 
     tap_event_id = str(data.get("tap_event_id") or "").strip()
     if not tap_event_id:
@@ -284,8 +341,8 @@ def record_camera_result(data):
     tap = PresenceEvent.query.filter_by(_event_id=tap_event_id, _source="rfid").first()
     if not tap:
         raise PresenceError(f"no tap with event_id {tap_event_id}", 404)
-    if tap._classroom_id != classroom_id:
-        raise PresenceError(f"tap {tap_event_id} is not in classroom {classroom_id}")
+    if tap.room_id != room.id:
+        raise PresenceError(f"tap {tap_event_id} is not in room {room.id}")
     if CameraCheck.query.filter_by(_tap_id=tap.id).first():
         raise PresenceError(f"tap {tap_event_id} already has a camera result", 409, status="already_checked")
 
@@ -295,12 +352,9 @@ def record_camera_result(data):
 
     recognized_user = None
     if result == "match":
-        uid = str(data.get("uid") or "").strip()
-        if not uid:
+        if not str(data.get("uid") or "").strip():
             raise PresenceError("uid required when result is match")
-        recognized_user = User.query.filter_by(_uid=uid).first()
-        if not recognized_user:
-            raise PresenceError(f"no user with uid {uid}", 404, status="unregistered")
+        recognized_user = get_user(data.get("uid"))
 
     confidence = data.get("confidence")
     if confidence is not None:
@@ -337,83 +391,7 @@ def record_camera_result(data):
     return {"status": "accepted", "duplicate": False, "check": check.to_dict()}, 200
 
 
-@presence_api.route('/event', methods=['POST'])
-@require_device_api_key
-def post_event():
-    data = request.get_json(force=True, silent=True)
-    if not isinstance(data, dict):
-        return jsonify({"message": "JSON object body required"}), 400
-    try:
-        if data.get("source") == "camera":
-            body, status = record_camera_result(data)
-        else:
-            body, status = record_event(data)
-    except PresenceError as e:
-        return e.response()
-    return jsonify(body), status
-
-
-@presence_api.route('/classrooms/<int:classroom_id>/taps/pending', methods=['GET'])
-@require_device_api_key
-def pending_taps(classroom_id):
-    """Taps from the last CAMERA_WINDOW that the camera has not answered
-    yet. The camera polls this about once a second, takes a picture for
-    each, and posts a camera result back."""
-    if not Classroom.query.get(classroom_id):
-        return jsonify({"message": f"no classroom {classroom_id}"}), 404
-
-    taps = (
-        PresenceEvent.query.outerjoin(CameraCheck, CameraCheck._tap_id == PresenceEvent.id)
-        .filter(
-            CameraCheck.id.is_(None),
-            PresenceEvent._classroom_id == classroom_id,
-            PresenceEvent._source == "rfid",
-            PresenceEvent._type.in_(["enter", "exit"]),
-            PresenceEvent._occurred_at >= utc_now() - CAMERA_WINDOW,
-        )
-        .order_by(PresenceEvent._occurred_at)
-        .all()
-    )
-    return jsonify([
-        {
-            "tap_event_id": tap.event_id,
-            "uid": tap.user.uid if tap.user else None,
-            "occurred_at": to_iso_z(tap.occurred_at),
-            "type": tap.type,
-        }
-        for tap in taps
-    ])
-
-
-@presence_api.route('/periods/start', methods=['POST'])
-@token_required(["Admin", "Teacher"])
-def start_period():
-    """Starts a manual period now, for demos/testing. While it runs it takes
-    precedence over the bell schedule (see period_at)."""
-    data = request.get_json(silent=True) or {}
-    try:
-        duration_seconds = int(data.get("duration_seconds", 120))
-        grace_seconds = int(data.get("grace_seconds", 15))
-    except (TypeError, ValueError):
-        return jsonify({"message": "duration_seconds and grace_seconds must be integers"}), 400
-    if duration_seconds <= 0 or grace_seconds < 0:
-        return jsonify({"message": "duration_seconds must be > 0 and grace_seconds >= 0"}), 400
-
-    PresencePeriod.query.filter_by(_source="manual", _active=True).update({"_active": False})
-    period = PresencePeriod(
-        name=str(data.get("name") or "Demo Period")[:80],
-        # Whole seconds, so a tap stamped (to the millisecond) right as the
-        # period starts never sorts before it.
-        start_time=utc_now().replace(microsecond=0),
-        duration_seconds=duration_seconds,
-        grace_seconds=grace_seconds,
-        source="manual",
-        active=True,
-    )
-    db.session.add(period)
-    db.session.commit()
-    return jsonify(period.to_dict(now=utc_now())), 201
-
+# ---------------------------------------------------------------- status
 
 def tap_verification(tap, check, now):
     """Camera verification for one tap, as shown on the dashboard."""
@@ -427,9 +405,8 @@ def tap_verification(tap, check, now):
 
 
 def compute_state(events, period, now):
-    """State for one student in one period, from that student's counted
-    (enter/exit) events in occurred_at order. Ported from the standalone
-    prototype."""
+    """State for one person in one period, from their counted (enter/exit)
+    events in occurred_at order. Ported from the standalone prototype."""
     window_open = now < period.end_time
 
     if not events:
@@ -447,36 +424,27 @@ def compute_state(events, period, now):
     return "TEMP_OUT" if window_open else "LEFT_EARLY"
 
 
-@presence_api.route('/classrooms/<int:classroom_id>/status', methods=['GET'])
-@token_required(["Admin", "Teacher"])
-def classroom_status(classroom_id):
-    """Each student's current state for the current period. The roster is
-    everyone enrolled in the classroom plus anyone who has ever produced a
-    presence event in it (so tagged students show up before enrollment is
-    set up). Restricted to teachers/admins since it shows the whole class."""
-    classroom = Classroom.query.get(classroom_id)
-    if not classroom:
-        return jsonify({"message": f"no classroom {classroom_id}"}), 404
-
+def room_status(room):
+    """Each person's current state for the room's current period. The roster
+    is the room's members plus anyone who has ever produced a presence event
+    in the room (so tagged people show up before membership is set up)."""
     now = utc_now()
-    period = current_period(now)
+    period = current_period(room, now)
     body = {
-        "classroom": {"id": classroom.id, "name": classroom.name},
+        "room": {"id": room.id, "name": room.name},
         "generated_at": to_iso_z(now),
         "period": period.to_dict(now=now) if period else None,
         "students": [],
     }
     if not period:
-        return jsonify(body)
+        return body
 
-    enrolled = {u.id: u for u in classroom.students}
+    members = {u.id: u for u in room.members}
     seen_ids = {
         row[0]
-        for row in db.session.query(PresenceEvent._user_id)
-        .filter(PresenceEvent._classroom_id == classroom_id)
-        .distinct()
+        for row in db.session.query(PresenceEvent._user_id).filter(PresenceEvent._room_id == room.id).distinct()
     }
-    roster = dict(enrolled)
+    roster = dict(members)
     missing = seen_ids - roster.keys()
     if missing:
         roster.update({u.id: u for u in User.query.filter(User.id.in_(missing))})
@@ -484,7 +452,7 @@ def classroom_status(classroom_id):
     events_by_user = {}
     period_events = (
         PresenceEvent.query.filter(
-            PresenceEvent._classroom_id == classroom_id,
+            PresenceEvent._room_id == room.id,
             PresenceEvent._period_id == period.id,
             PresenceEvent._type.in_(["enter", "exit"]),
         )
@@ -507,8 +475,310 @@ def classroom_status(classroom_id):
             "state": compute_state(events, period, now),
             "since": to_iso_z(last.occurred_at) if last else None,
             "last_source": last._source if last else None,
-            # Camera verification of the student's most recent tap.
+            # Camera verification of the person's most recent tap.
             "verification": tap_verification(last, checks_by_tap.get(last.id), now) if last else None,
-            "enrolled": user.id in enrolled,
+            "member": user.id in members,
         })
-    return jsonify(body)
+    return body
+
+
+# ---------------------------------------------------------------- rooms
+
+def apply_room_fields(room, data):
+    if "name" in data:
+        name = str(data.get("name") or "").strip()
+        if not name:
+            raise PresenceError("name required")
+        clash = PresenceRoom.query.filter_by(_name=name[:120]).first()
+        if clash and clash.id != room.id:
+            raise PresenceError(f"a room named {name!r} already exists", 409)
+        room.name = name[:120]
+    if "description" in data:
+        room.description = (str(data["description"]).strip()[:255] or None) if data["description"] else None
+    if "schedule_id" in data:
+        room.schedule_id = get_schedule(data["schedule_id"]).id if data["schedule_id"] is not None else None
+    if "member_uids" in data:
+        if not isinstance(data["member_uids"], list):
+            raise PresenceError("member_uids must be a list of uids")
+        users = [get_user(uid) for uid in data["member_uids"]]
+        for user in room.members.all():
+            room.members.remove(user)
+        for user in users:
+            room.members.append(user)
+
+
+class PresenceAPI:
+    class _Event(PresenceResource):
+        @require_device_api_key
+        def post(self):
+            """A device reports a presence signal (RFID tap or camera result)."""
+            data = json_body()
+            if data.get("source") == "camera":
+                return record_camera_result(data)
+            return record_event(data)
+
+    class _PendingTaps(PresenceResource):
+        @require_device_api_key
+        def get(self, room_id):
+            """Taps from the last CAMERA_WINDOW that the camera has not answered
+            yet. The camera polls this about once a second, takes a picture for
+            each, and posts a camera result back."""
+            room = get_room(room_id)
+            taps = (
+                PresenceEvent.query.outerjoin(CameraCheck, CameraCheck._tap_id == PresenceEvent.id)
+                .filter(
+                    CameraCheck.id.is_(None),
+                    PresenceEvent._room_id == room.id,
+                    PresenceEvent._source == "rfid",
+                    PresenceEvent._type.in_(["enter", "exit"]),
+                    PresenceEvent._occurred_at >= utc_now() - CAMERA_WINDOW,
+                )
+                .order_by(PresenceEvent._occurred_at)
+                .all()
+            )
+            return [
+                {"tap_event_id": tap.event_id, "uid": tap.user.uid if tap.user else None,
+                 "occurred_at": to_iso_z(tap.occurred_at), "type": tap.type}
+                for tap in taps
+            ]
+
+    class _Rooms(PresenceResource):
+        @token_required(STAFF)
+        def get(self):
+            return [room.to_dict() for room in PresenceRoom.query.order_by(PresenceRoom._name).all()]
+
+        @token_required(STAFF)
+        def post(self):
+            """Create a room: {name, description?, schedule_id?, member_uids?}."""
+            data = json_body()
+            name = str(data.get("name") or "").strip()[:120]
+            if not name:
+                raise PresenceError("name required")
+            existing = PresenceRoom.query.filter_by(_name=name).first()
+            if existing:  # the id lets a client (e.g. api/presence.http) continue with the existing room
+                raise PresenceError(f"a room named {name!r} already exists", 409, id=existing.id)
+            room = PresenceRoom(name=name)
+            db.session.add(room)
+            db.session.flush()  # members can only be linked once the room has an id
+            apply_room_fields(room, {k: v for k, v in data.items() if k != "name"})
+            db.session.commit()
+            return room.to_dict(), 201
+
+    class _Room(PresenceResource):
+        @token_required(STAFF)
+        def get(self, room_id):
+            return get_room(room_id).to_dict()
+
+        @token_required(STAFF)
+        def put(self, room_id):
+            """Update any of {name, description, schedule_id (null = none), member_uids}."""
+            room = get_room(room_id)
+            apply_room_fields(room, json_body())
+            db.session.commit()
+            return room.to_dict()
+
+        @token_required(STAFF)
+        def delete(self, room_id):
+            """Deletes a room that has no recorded events (its history stays intact)."""
+            room = get_room(room_id)
+            if PresenceEvent.query.filter_by(_room_id=room.id).first():
+                raise PresenceError(f"room {room.id} has recorded events and cannot be deleted", 409)
+            PresenceScheduleOverride.query.filter_by(_room_id=room.id).delete()
+            PresencePeriod.query.filter_by(_room_id=room.id).delete()
+            db.session.execute(presence_room_members.delete().where(presence_room_members.c.room_id == room.id))
+            db.session.delete(room)
+            db.session.commit()
+            return {"message": f"room {room_id} deleted"}
+
+    class _RoomMember(PresenceResource):
+        @token_required(STAFF)
+        def post(self, room_id, uid):
+            room, user = get_room(room_id), get_user(uid)
+            if not room.members.filter(User.id == user.id).first():
+                room.members.append(user)
+                db.session.commit()
+            return room.to_dict()
+
+        @token_required(STAFF)
+        def delete(self, room_id, uid):
+            room, user = get_room(room_id), get_user(uid)
+            if room.members.filter(User.id == user.id).first():
+                room.members.remove(user)
+                db.session.commit()
+            return room.to_dict()
+
+    class _RoomPeriods(PresenceResource):
+        @token_required(STAFF)
+        def get(self, room_id):
+            """The room's current period and its 10 most recent periods."""
+            room, now = get_room(room_id), utc_now()
+            period = current_period(room, now)
+            recent = (PresencePeriod.query.filter_by(_room_id=room.id)
+                      .order_by(PresencePeriod._start_time.desc()).limit(10).all())
+            return {"current": period.to_dict(now=now) if period else None,
+                    "recent": [p.to_dict(now=now) for p in recent]}
+
+        @token_required(STAFF)
+        def post(self, room_id):
+            """Starts a manual period in this room now: {duration_seconds?,
+            grace_seconds?, name?}. While it runs it takes precedence over the
+            room's schedule (see period_at)."""
+            room = get_room(room_id)
+            data = request.get_json(silent=True) or {}
+            try:
+                duration_seconds = int(data.get("duration_seconds", 120))
+                grace_seconds = int(data.get("grace_seconds", 15))
+            except (TypeError, ValueError):
+                raise PresenceError("duration_seconds and grace_seconds must be integers")
+            if duration_seconds <= 0 or grace_seconds < 0:
+                raise PresenceError("duration_seconds must be > 0 and grace_seconds >= 0")
+
+            PresencePeriod.query.filter_by(_room_id=room.id, _source="manual", _active=True).update({"_active": False})
+            period = PresencePeriod(
+                room_id=room.id,
+                name=str(data.get("name") or "Manual Period")[:80],
+                # Whole seconds, so a tap stamped (to the millisecond) right as the
+                # period starts never sorts before it.
+                start_time=utc_now().replace(microsecond=0),
+                duration_seconds=duration_seconds,
+                grace_seconds=grace_seconds,
+                source="manual",
+                active=True,
+            )
+            db.session.add(period)
+            db.session.commit()
+            return period.to_dict(now=utc_now()), 201
+
+    class _RoomStatus(PresenceResource):
+        @token_required(STAFF)
+        def get(self, room_id):
+            """Each person's current state for the room's current period."""
+            return room_status(get_room(room_id))
+
+    class _Schedules(PresenceResource):
+        @token_required(STAFF)
+        def get(self):
+            return [s.to_dict() for s in PresenceSchedule.query.order_by(PresenceSchedule._name).all()]
+
+        @token_required(STAFF)
+        def post(self):
+            """Create a schedule: {name, timezone?, grace_seconds?, blocks: [{name, weekdays, start, end}]}."""
+            data = json_body()
+            name = str(data.get("name") or "").strip()[:80]
+            if not name:
+                raise PresenceError("name required")
+            existing = PresenceSchedule.query.filter_by(_name=name).first()
+            if existing:  # the id lets a client continue with the existing schedule
+                raise PresenceError(f"a schedule named {name!r} already exists", 409, id=existing.id)
+            schedule = PresenceSchedule(name=name, timezone=check_timezone(data.get("timezone")),
+                                        grace_seconds=_grace(data))
+            schedule.set_blocks(data.get("blocks", []))
+            db.session.add(schedule)
+            db.session.commit()
+            return schedule.to_dict(), 201
+
+    class _Schedule(PresenceResource):
+        @token_required(STAFF)
+        def get(self, schedule_id):
+            return get_schedule(schedule_id).to_dict()
+
+        @token_required(STAFF)
+        def put(self, schedule_id):
+            """Update any of {name, timezone, grace_seconds, blocks (replaces all blocks)}.
+            Periods already created keep their times; new ones use the edit."""
+            schedule, data = get_schedule(schedule_id), json_body()
+            if "name" in data:
+                name = str(data.get("name") or "").strip()[:80]
+                clash = PresenceSchedule.query.filter_by(_name=name).first()
+                if not name or (clash and clash.id != schedule.id):
+                    raise PresenceError(f"schedule name {name!r} is empty or taken", 409 if name else 400)
+                schedule._name = name
+            if "timezone" in data:
+                schedule._timezone = check_timezone(data["timezone"])
+            if "grace_seconds" in data:
+                schedule._grace_seconds = _grace(data)
+            if "blocks" in data:
+                schedule.set_blocks(data["blocks"])
+            db.session.commit()
+            return schedule.to_dict()
+
+        @token_required(STAFF)
+        def delete(self, schedule_id):
+            """Deletes a schedule no room or override uses."""
+            schedule = get_schedule(schedule_id)
+            rooms = [r.name for r in PresenceRoom.query.filter_by(_schedule_id=schedule.id)]
+            overrides = PresenceScheduleOverride.query.filter_by(_schedule_id=schedule.id).count()
+            if rooms or overrides:
+                raise PresenceError(f"schedule {schedule.id} is in use", 409, rooms=rooms, overrides=overrides)
+            db.session.delete(schedule)
+            db.session.commit()
+            return {"message": f"schedule {schedule_id} deleted"}
+
+    class _Overrides(PresenceResource):
+        @token_required(STAFF)
+        def get(self):
+            """Overrides from ?from=YYYY-MM-DD (default: today, UTC) onward."""
+            start = parse_date(request.args["from"], "from") if request.args.get("from") else utc_now().date()
+            rows = (PresenceScheduleOverride.query.filter(PresenceScheduleOverride._date >= start)
+                    .order_by(PresenceScheduleOverride._date).all())
+            return [o.to_dict() for o in rows]
+
+        @token_required(STAFF)
+        def post(self):
+            """Replace the schedule for one date: {date, room_id? (null = every
+            room), schedule_id? (null = no periods), note?}. Replaces an existing
+            override for the same date and room."""
+            data = json_body()
+            day = parse_date(data.get("date"))
+            room_id = get_room(data["room_id"]).id if data.get("room_id") is not None else None
+            schedule_id = get_schedule(data["schedule_id"]).id if data.get("schedule_id") is not None else None
+            PresenceScheduleOverride.query.filter_by(_date=day, _room_id=room_id).delete()
+            override = PresenceScheduleOverride(date=day, room_id=room_id, schedule_id=schedule_id,
+                                                note=(str(data.get("note")).strip()[:120] if data.get("note") else None))
+            db.session.add(override)
+            db.session.commit()
+            return override.to_dict(), 201
+
+    class _Override(PresenceResource):
+        @token_required(STAFF)
+        def delete(self, override_id):
+            override = PresenceScheduleOverride.query.get(override_id)
+            if not override:
+                raise PresenceError(f"no override {override_id}", 404)
+            db.session.delete(override)
+            db.session.commit()
+            return {"message": f"override {override_id} deleted"}
+
+    api.add_resource(_Event, '/event')
+    api.add_resource(_Rooms, '/rooms')
+    api.add_resource(_Room, '/rooms/<int:room_id>')
+    api.add_resource(_RoomMember, '/rooms/<int:room_id>/members/<string:uid>')
+    api.add_resource(_RoomPeriods, '/rooms/<int:room_id>/periods')
+    api.add_resource(_RoomStatus, '/rooms/<int:room_id>/status')
+    api.add_resource(_PendingTaps, '/rooms/<int:room_id>/taps/pending')
+    api.add_resource(_Schedules, '/schedules')
+    api.add_resource(_Overrides, '/schedules/overrides')
+    api.add_resource(_Override, '/schedules/overrides/<int:override_id>')
+    api.add_resource(_Schedule, '/schedules/<int:schedule_id>')
+
+
+def _grace(data):
+    try:
+        grace = int(data.get("grace_seconds", 300))
+    except (TypeError, ValueError):
+        raise PresenceError("grace_seconds must be an integer")
+    if grace < 0:
+        raise PresenceError("grace_seconds must be >= 0")
+    return grace
+
+
+def json_not_found(blueprint):
+    """Unknown paths under the blueprint's prefix get a JSON 404 instead of the
+    site's HTML 404 page. Scoped to this prefix; the rest of the site is untouched."""
+    @blueprint.route('/', defaults={'unknown': ''}, methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
+    @blueprint.route('/<path:unknown>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
+    def not_found(unknown):
+        return jsonify({"message": f"no presence endpoint {request.method} {request.path}"}), 404
+
+
+json_not_found(presence_api)
