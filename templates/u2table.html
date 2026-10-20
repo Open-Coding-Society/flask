@@ -5,7 +5,7 @@
 <div class="container mt-5">
     <h1>User Management</h1>
 
-    {% set is_staff = current_user.role in ['Admin', 'Teacher'] %}
+    {% set is_staff = current_user.is_staff() %}
 
     {% if is_staff %}
     <div class="d-flex flex-wrap align-items-center gap-3 mb-3" id="accountFilters">
@@ -89,7 +89,7 @@
                     <button class="btn btn-secondary status-btn" data-uid="{{ user.uid }}" data-action="deactivate">Deactivate</button>
                     {% endif %}
                     {% endif %}
-                    {% if current_user.role == 'Admin' %}
+                    {% if current_user.is_admin() %}
                     {% if user.deletion_blocker(current_user) is none %}
                     <button class="btn btn-danger delete-btn" data-id="{{ user.id }}">Delete</button>
                     {% endif %}

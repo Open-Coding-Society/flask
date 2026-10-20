@@ -1,6 +1,7 @@
 {
   "verification_interval_days": 365,
   "essential_roles": ["Admin", "Teacher"],
+  "staff_roles": ["Teacher", "Admin"],
   "default_account_type": "student",
   "account_types": {
     "student": {

@@ -325,6 +325,10 @@ class User(db.Model, UserMixin):
     def is_teacher(self):
         return self._role == "Teacher"
 
+    def is_staff(self):
+        """True for the roles that manage accounts (staff_roles in account_types.json)."""
+        return self.role in account_types.staff_roles()
+
     @property
     def verification_state(self):
         if not self.active:
