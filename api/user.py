@@ -375,7 +375,11 @@ class UserAPI:
             # bad request
             if user is None:
                 return {'message': f'User {uid} not found'}, 404
-           
+
+            blocker = user.deletion_blocker(g.current_user)
+            if blocker:
+                return {'message': blocker[1]}, blocker[0]
+
             # Read and then Delete the User object using custom methods
             user_json = _without_password(user.read())
             user.delete()
@@ -858,17 +862,25 @@ class UserAPI:
             return {'message': f'Password reset for {uid}'}, 200
 
     class _VerifyAccount(Resource):
-        """Teacher/Admin verifies an account: marks it active and records last_verified.
-        Accounts verified through Google OAuth (see model/account_types.json) are not
-        verified here."""
+        """Teacher/Admin verifies any account: marks it active and records last_verified.
+        How long that covers is fixed for some roles (see model/account_types.json); for the
+        others the optional JSON body {"days": N} says (1 up to the full interval), and
+        default_verification_days applies when it is left out."""
         @token_required(["Teacher", "Admin"])
         def post(self, uid):
             target = User.query.filter_by(_uid=uid).first()
             if target is None:
                 return {'message': f'User {uid} not found'}, 404
-            if target.role in account_types.oauth_roles():
-                return {'message': 'This account is verified through Google sign-in, not by a Teacher or Admin'}, 400
-            return jsonify(_without_password(target.activate().read()))
+            days = account_types.fixed_verification_days(target.role)
+            if days is None:
+                body = request.get_json(silent=True)
+                if body is not None and not isinstance(body, dict):
+                    return {'message': 'The body must be a JSON object such as {"days": 30}'}, 400
+                days = (body or {}).get('days', account_types.default_verification_days())
+            interval = account_types.verification_interval_days()
+            if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= interval:
+                return {'message': f'days must be a whole number from 1 to {interval}'}, 400
+            return jsonify(_without_password(target.activate(days).read()))
 
     class _DeactivateAccount(Resource):
         """Teacher/Admin marks an account inactive. The account and its data are kept."""
@@ -877,7 +889,27 @@ class UserAPI:
             target = User.query.filter_by(_uid=uid).first()
             if target is None:
                 return {'message': f'User {uid} not found'}, 404
+            blocker = target.deactivation_blocker(g.current_user)
+            if blocker:
+                return {'message': blocker[1]}, blocker[0]
             return jsonify(_without_password(target.deactivate().read()))
+
+    class _ChangeRole(Resource):
+        """Teacher/Admin changes another account's role: POST {"role": "Mentor"}. Only an Admin can
+        make someone an Admin or change an Admin's role; nobody changes their own role."""
+        @token_required(["Teacher", "Admin"])
+        def post(self, uid):
+            target = User.query.filter_by(_uid=uid).first()
+            if target is None:
+                return {'message': f'User {uid} not found'}, 404
+            body = request.get_json(silent=True)
+            role = body.get('role') if isinstance(body, dict) else None
+            blocker = target.role_change_blocker(g.current_user, role)
+            if blocker:
+                return {'message': blocker[1]}, blocker[0]
+            target.role = role
+            db.session.commit()
+            return jsonify(_without_password(target.read()))
 
     class _AdminCreate(Resource):
         """Teacher/Admin creates an account of a staff-created type (see
@@ -912,6 +944,7 @@ class UserAPI:
     api.add_resource(_ResetPasswordVerified, '/reset-password')
     api.add_resource(_VerifyAccount, '/user/<string:uid>/verify')
     api.add_resource(_DeactivateAccount, '/user/<string:uid>/deactivate')
+    api.add_resource(_ChangeRole, '/user/<string:uid>/role')
     api.add_resource(_AdminCreate, '/user/admin-create')
     
     class _Class(Resource):

@@ -19,6 +19,10 @@ from model.study import Study
 from model.persona import Persona, UserPersona
 from model.leaderboard import ScoreCounterEvent, ElementaryLeaderboardEvent
 from model.skill_snapshot import SkillSnapshot
+from model.presence import CameraCheck, PresenceEvent, PresencePeriod, PresenceRoom
+from model.presence_schedule import PresenceSchedule, PresenceScheduleBlock, PresenceScheduleOverride
+from model.rfid_tag import RfidTag
+from model.presence_backup import export_presence, import_presence
 
 data_export_import_api = Blueprint('data_export_import_api', __name__, url_prefix='/api/export')
 api = Api(data_export_import_api)
@@ -52,6 +56,16 @@ MIGRATED_MODELS = {
     'leaderboard':              ScoreCounterEvent,
     'elementary_leaderboard':   ElementaryLeaderboardEvent,
     'skill_snapshots':          SkillSnapshot,
+    # Presence system (exported/imported together as one 'presence' bundle,
+    # see model/presence_backup.py)
+    'presence_schedules':          PresenceSchedule,
+    'presence_schedule_blocks':    PresenceScheduleBlock,
+    'presence_rooms':              PresenceRoom,
+    'presence_schedule_overrides': PresenceScheduleOverride,
+    'rfid_tags':                   RfidTag,
+    'presence_periods':            PresencePeriod,
+    'presence_events':             PresenceEvent,
+    'camera_checks':               CameraCheck,
 }
 
 
@@ -82,6 +96,11 @@ class ExportCounts(Resource):
             counts['user_sections'] = UserSection.query.count()
         except Exception as e:
             counts['user_sections'] = f'error: {e}'
+        try:
+            from model.presence import presence_room_members
+            counts['presence_room_members'] = db.session.query(presence_room_members).count()
+        except Exception as e:
+            counts['presence_room_members'] = f'error: {e}'
 
         return jsonify({'counts': counts})
 
@@ -121,6 +140,7 @@ class ExportAllData(Resource):
                 'leaderboard': self._export_event_table(ScoreCounterEvent),
                 'elementary_leaderboard': self._export_event_table(ElementaryLeaderboardEvent),
                 'skill_snapshots': self._export_skill_snapshots(),
+                'presence': export_presence(),
             }
 
             # Add metadata
@@ -364,6 +384,10 @@ class ImportAllData(Resource):
             # 12. Skill snapshots (depend on users)
             if 'skill_snapshots' in data:
                 results['skill_snapshots'] = self._import_skill_snapshots(data['skill_snapshots'])
+
+            # 13. Presence system: rooms, schedules, tags, periods, events (depend on users)
+            if 'presence' in data:
+                results['presence'] = import_presence(data['presence'])
 
             return jsonify({
                 'message': 'Import completed',
@@ -1376,6 +1400,33 @@ class ImportSkillSnapshots(Resource):
 
 
 # Register endpoints
+class ExportPresence(Resource):
+    """Export the presence system's tables as one bundle (model/presence_backup.py)."""
+    @token_required()
+    def get(self):
+        if g.current_user.role != 'Admin':
+            return {'message': 'Admin privileges required'}, 403
+        return jsonify({'presence': export_presence()})
+
+
+class ImportPresence(Resource):
+    """Import the presence bundle. Matches people by uid; skips rows that already exist."""
+    @token_required()
+    def post(self):
+        if g.current_user.role != 'Admin':
+            return {'message': 'Admin privileges required'}, 403
+        data = request.get_json(silent=True) or {}
+        tables = import_presence(data.get('presence') or {})
+        summary = {
+            'imported': sum(t['imported'] for t in tables.values()),
+            'failed': sum(t['failed'] for t in tables.values()),
+            'skipped': sum(t['skipped'] for t in tables.values()),
+            'errors': [e for t in tables.values() for e in t['errors']],
+            'tables': tables,
+        }
+        return jsonify({'presence': summary, 'message': 'Presence import complete'})
+
+
 api.add_resource(ExportAllData, '/all')
 api.add_resource(ImportAllData, '/import')
 api.add_resource(ExportCounts, '/counts')
@@ -1394,6 +1445,7 @@ api.add_resource(ExportUserPersonas, '/user_personas')
 api.add_resource(ExportLeaderboard, '/leaderboard')
 api.add_resource(ExportElementaryLeaderboard, '/elementary_leaderboard')
 api.add_resource(ExportSkillSnapshots, '/skill_snapshots')
+api.add_resource(ExportPresence, '/presence')
 
 # Chunked import endpoints (POST to same paths as export)
 api.add_resource(ImportSections, '/import/sections')
@@ -1409,3 +1461,4 @@ api.add_resource(ImportUserPersonas, '/import/user_personas')
 api.add_resource(ImportLeaderboard, '/import/leaderboard')
 api.add_resource(ImportElementaryLeaderboard, '/import/elementary_leaderboard')
 api.add_resource(ImportSkillSnapshots, '/import/skill_snapshots')
+api.add_resource(ImportPresence, '/import/presence')

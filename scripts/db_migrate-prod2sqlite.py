@@ -61,6 +61,7 @@ EXPORT_ENDPOINTS = {
     'leaderboard':            '/api/export/leaderboard',
     'elementary_leaderboard': '/api/export/elementary_leaderboard',
     'skill_snapshots':        '/api/export/skill_snapshots',
+    'presence':               '/api/export/presence',  # one bundle, see model/presence_backup.py
 }
 
 # Data types that require paginated fetching
@@ -788,6 +789,15 @@ def load_skill_snapshots(snapshots_data):
     print(f"  Loaded {loaded} skill snapshots.")
 
 
+def load_presence(presence_data):
+    """Presence system tables (rooms, schedules, tags, periods, events), as one bundle."""
+    from model.presence_backup import import_presence
+    for table, stats in import_presence(presence_data or {}).items():
+        print(f"  {table}: {stats['imported']} imported, {stats['skipped']} skipped, {stats['failed']} failed")
+        for err in stats['errors'][:3]:
+            print(f"    - {err}")
+
+
 def load_all(all_data):
     """Load all data types into the local database in dependency order."""
     user_uid_map = {u.get('id'): u.get('uid') for u in all_data.get('users', []) if u.get('id') and u.get('uid')}
@@ -809,6 +819,7 @@ def load_all(all_data):
                           lambda: load_elementary_leaderboard(all_data.get('elementary_leaderboard', []))),
         ('skill_snapshots',
                           lambda: load_skill_snapshots(all_data.get('skill_snapshots', []))),
+        ('presence',      lambda: load_presence(all_data.get('presence', {}))),
     ]
 
     for name, loader in loaders:

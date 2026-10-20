@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 # import "objects" from "this" project
 from __init__ import app, db, login_manager  # Key Flask objects 
 from model.persona import Persona, initPersonas, initPersonaUsers
+from model.presence_schedule import seed_schedules
 # API endpoints
 from api.user import user_api 
 from api.python_exec_api import python_exec_api
@@ -32,6 +33,8 @@ from api.post import post_api  # Import the social media post API
 from api.congrats_api import congrats_api  # Import the congrats API
 from api.profile_game import profile_game_api  # CS Pathway Game profile persistence
 from api.snapshot_proxy import snapshot_proxy
+from api.rfid_api import rfid_api
+from api.presence_api import presence_api
 #from api.announcement import announcement_api ##temporary revert
 
 # database Initialization functions
@@ -88,6 +91,8 @@ app.register_blueprint(post_api)  # Register the social media post API
 app.register_blueprint(congrats_api)  # Register the congrats message API
 app.register_blueprint(profile_game_api)  # CS Pathway Game profile persistence
 app.register_blueprint(snapshot_proxy)  # Register the snapshot proxy API
+app.register_blueprint(rfid_api)  # Register the RFID attendance API
+app.register_blueprint(presence_api)  # Register the generic presence event API
 # app.register_blueprint(announcement_api) ##temporary revert
 
 # Jokes file initialization
@@ -185,7 +190,7 @@ def index():
 @login_required
 def u2table():
     users = User.query.all()
-    return render_template("u2table.html", user_data=users)
+    return render_template("u2table.html", user_data=users, role_options=current_user.grantable_roles())
 
 @app.route('/sections/')
 @login_required
@@ -209,6 +214,9 @@ def uploaded_file(filename):
 def delete_user(user_id):
     user = User.query.get(user_id)
     if user:
+        blocker = user.deletion_blocker(current_user)
+        if blocker:
+            return jsonify({'error': blocker[1]}), blocker[0]
         user.delete()
         return jsonify({'message': 'User deleted successfully'}), 200
     return jsonify({'error': 'User not found'}), 404
@@ -265,6 +273,7 @@ def generate_data():
     initMicroblogs()
     initPersonas()
     initPersonaUsers()
+    seed_schedules()  # presence schedules from model/presence_schedules.json
 
 # Register the custom command group with the Flask application
 app.cli.add_command(custom_cli)
