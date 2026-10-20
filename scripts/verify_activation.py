@@ -7,7 +7,7 @@ real dev DB before and after to prove it was never touched.
 Usage:  python scripts/verify_activation.py        (from the flask repo root)
 Exit:   0 all checks passed, 1 otherwise.
 """
-import copy, hashlib, os, shutil, sys, tempfile
+import copy, hashlib, os, secrets, shutil, sys, tempfile
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -17,7 +17,8 @@ sys.path.insert(0, REPO)
 os.environ.setdefault("SECRET_KEY", "verify-activation")
 
 REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
-PASSWORD, CLIENT_ID, GOOD = "Passw0rd!123", "test-client-id", "good-token"
+PASSWORD = secrets.token_urlsafe(16)  # new every run; the accounts live only in a throwaway database
+CLIENT_ID, GOOD = "test-client-id", "good-token"
 MIGRATION_SQL = [
     "ALTER TABLE users ADD COLUMN active BOOLEAN NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN last_verified DATETIME NULL",

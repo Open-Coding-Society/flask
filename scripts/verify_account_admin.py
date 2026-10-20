@@ -7,7 +7,7 @@ to prove it was never touched. Complements scripts/verify_activation.py, which c
 Usage:  python scripts/verify_account_admin.py        (from the flask repo root)
 Exit:   0 all checks passed, 1 otherwise.
 """
-import hashlib, os, re, sys, tempfile
+import hashlib, os, re, secrets, sys, tempfile
 from datetime import datetime, timedelta
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -16,7 +16,7 @@ sys.path.insert(0, REPO)
 os.environ.setdefault("SECRET_KEY", "verify-account-admin")
 
 REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
-PASSWORD = "Passw0rd!123"
+PASSWORD = secrets.token_urlsafe(16)  # new every run; the accounts live only in a throwaway database
 _failures = []
 
 
