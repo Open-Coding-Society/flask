@@ -1,0 +1,61 @@
+# Select the REST Client environment, then authenticate as an Admin in user_auth.http.
+# Use a disposable GitHub UID that does not already exist in this app.
+@testUid = wilma 
+
+### 1. Create user (expect 200)
+# @name createUser
+# @note Creates a real account in the selected environment and requests Kasm provisioning. Check testUid first.
+# dob is included from the example, but the current create endpoint ignores it.
+# accountType mentor creates an inactive Mentor, activated in step 1b. A student is not activated by staff:
+# a student becomes active when Google verifies their school email at sign-up.
+POST {{baseUrl}}/api/user
+Content-Type: application/json
+Accept: application/json
+
+{
+  "uid": "{{testUid}}",
+  "name": "Wilma Flinstone",
+  "dob": "1000-01-02",
+  "accountType": "mentor",
+  "kasm_server_needed": true
+}
+
+### 1b. Activate the new Mentor (expect 200 and "active": true)
+# @name verifyUser
+# @note A new Mentor is inactive and gets 403 "Account pending verification" on protected endpoints until a Teacher or Admin verifies it.
+POST {{baseUrl}}/api/user/{{testUid}}/verify
+Accept: application/json
+
+### 2. Read logged-in user from cookie (expect 200 and role Admin)
+# @name currentUser
+# This returns the authenticated Admin, not the newly created user.
+GET {{baseUrl}}/api/id
+Accept: application/json
+
+### 3. Read all users (expect 200 and an array containing testUid)
+# @name listUsers
+GET {{baseUrl}}/api/user
+Accept: application/json
+
+### 4. Update user (expect 200 and the updated name)
+# @name updateUser
+# @note Requires an Admin login to update testUid rather than the logged-in account.
+PUT {{baseUrl}}/api/user
+Content-Type: application/json
+Accept: application/json
+
+{
+  "uid": "{{testUid}}",
+  "name": "Wilma Flintstone Updated"
+}
+
+### 5. Delete user (expect 204 with no response body)
+# @name deleteUser
+# @note Permanently deletes testUid in the selected environment. Run only after Create succeeded for this test account.
+DELETE {{baseUrl}}/api/user
+Content-Type: application/json
+Accept: application/json
+
+{
+  "uid": "{{testUid}}"
+}

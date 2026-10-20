@@ -1,0 +1,17 @@
+{
+  "verification_interval_days": 365,
+  "essential_roles": ["Admin", "Teacher"],
+  "default_account_type": "student",
+  "account_types": {
+    "student": {
+      "role": "User",
+      "google_verified_domains": ["stu.powayusd.com"],
+      "staff_created": false
+    },
+    "mentor": {
+      "role": "Mentor",
+      "google_verified_domains": [],
+      "staff_created": true
+    }
+  }
+}

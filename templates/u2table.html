@@ -5,6 +5,26 @@
 <div class="container mt-5">
     <h1>User Management</h1>
 
+    {% set is_staff = current_user.role in ['Admin', 'Teacher'] %}
+
+    {% if is_staff %}
+    <div class="d-flex flex-wrap align-items-center gap-3 mb-3" id="accountFilters">
+        <div class="btn-group" role="group" aria-label="Filter by status">
+            <button type="button" class="btn btn-outline-secondary active" data-status="all">All</button>
+            <button type="button" class="btn btn-outline-secondary" data-status="true">Active</button>
+            <button type="button" class="btn btn-outline-secondary" data-status="false">Inactive</button>
+        </div>
+        <label class="mb-0">Role:
+            <select id="roleFilter" class="form-select d-inline-block w-auto">
+                <option value="">All</option>
+                {% for role in user_data|map(attribute='role')|unique|sort %}
+                <option value="{{ role }}">{{ role }}</option>
+                {% endfor %}
+            </select>
+        </label>
+    </div>
+    {% endif %}
+
     <table class="table table-striped" id="userTable">
         <thead>
             <tr>
@@ -13,6 +33,7 @@
                 <th>Name</th>
                 <th>Email</th>
                 <th>Role</th>
+                <th>Status</th>
                 <th>Profile Picture</th>
                 <th>Kasm Server Needed</th>
                 <th>Courses</th>
@@ -22,13 +43,22 @@
         </thead>
         <tbody>
             {% for user in user_data %}
-            {% if user.id == current_user.id or current_user.role == 'Admin' %}
-            <tr id="user-{{ user.id }}">
+            {% if user.id == current_user.id or is_staff %}
+            <tr id="user-{{ user.id }}" data-role="{{ user.role }}" data-active="{{ 'true' if user.active else 'false' }}">
                 <td>{{ user.id }}</td>
                 <td>{{ user.uid }}</td>
                 <td>{{ user.name }}</td>
                 <td>{{ user.email }}</td>
                 <td>{{ user.role }}</td>
+                <td>
+                    {% if user.verification_state == 'active_verified' %}
+                    <span class="badge bg-success">Active</span>
+                    {% elif user.verification_state == 'active_verification_required' %}
+                    <span class="badge bg-warning text-dark">Active - verification required</span>
+                    {% else %}
+                    <span class="badge bg-secondary">Inactive</span>
+                    {% endif %}
+                </td>
                 <td>
                     {% if user.pfp %}
                     <img src="{{ url_for('uploaded_file', filename=user.uid + '/' + user.pfp) }}" 
@@ -51,8 +81,18 @@
                 <td id="commits-{{ user.uid }}">Loading...</td>
                 <td>
                     <button class="btn btn-primary edit-btn" data-id="{{ user.id }}">Edit</button>
+                    {% if is_staff %}
+                    {% if user.staff_verifies and user.verification_due %}
+                    <button class="btn btn-success status-btn" data-uid="{{ user.uid }}" data-action="verify">{{ 'Verify' if user.active else 'Activate' }}</button>
+                    {% endif %}
+                    {% if user.active and user.id != current_user.id and user.deactivation_blocker(current_user) is none %}
+                    <button class="btn btn-secondary status-btn" data-uid="{{ user.uid }}" data-action="deactivate">Deactivate</button>
+                    {% endif %}
+                    {% endif %}
                     {% if current_user.role == 'Admin' %}
+                    {% if user.deletion_blocker(current_user) is none %}
                     <button class="btn btn-danger delete-btn" data-id="{{ user.id }}">Delete</button>
+                    {% endif %}
                     <button class="btn btn-warning reset-password-btn" data-id="{{ user.id }}">Reset Password</button>
                     {% endif %}
                 </td>
@@ -69,6 +109,31 @@
         const table =  $("#userTable").DataTable(); // repersents table
 
         table.page.len(-1).draw();  // shows all users and commits
+
+        // Filter by active state and role, read from each row's data attributes
+        let statusFilter = "all";
+        let roleFilter = "";
+        $.fn.dataTable.ext.search.push(function (settings, data, dataIndex) {
+            if (settings.nTable.id !== "userTable") return true;
+            const row = table.row(dataIndex).node();
+            const statusMatches = statusFilter === "all" || row.dataset.active === statusFilter;
+            const roleMatches = roleFilter === "" || row.dataset.role === roleFilter;
+            return statusMatches && roleMatches;
+        });
+        document.querySelectorAll("#accountFilters [data-status]").forEach(button => {
+            button.addEventListener("click", function () {
+                statusFilter = this.dataset.status;
+                document.querySelectorAll("#accountFilters [data-status]").forEach(b => b.classList.toggle("active", b === this));
+                table.draw();
+            });
+        });
+        const roleSelect = document.getElementById("roleFilter");
+        if (roleSelect) {
+            roleSelect.addEventListener("change", function () {
+                roleFilter = this.value;
+                table.draw();
+            });
+        }
         // Function to fetch commits (DISABLED)
         /*
         async function fetchAdminData(userUid) {
@@ -136,14 +201,33 @@
                     method: "DELETE",
                     headers: { "Content-Type": "application/json" },
                 })
-                    .then(response => response.json())
-                    .then(data => {
+                    .then(response => response.json().then(data => ({ ok: response.ok, data })))
+                    .then(({ ok, data }) => {
+                        if (!ok) throw new Error(data.error || data.message || "Could not delete the user.");
                         alert(data.message || "User deleted successfully.");
                         location.reload();
                     })
                     .catch(error => {
                         console.error("Error deleting user:", error);
-                        alert("Error deleting user.");
+                        alert(error.message || "Error deleting user.");
+                    });
+            });
+        });
+
+        // Handle activate / verify / deactivate
+        document.querySelectorAll(".status-btn").forEach(button => {
+            button.addEventListener("click", function () {
+                const { uid, action } = this.dataset;
+                if (action === "deactivate" && !confirm(`Deactivate ${uid}? They will be blocked until verified again.`)) return;
+                fetch(`/api/user/${uid}/${action}`, { method: "POST" })
+                    .then(response => response.json().then(data => ({ ok: response.ok, data })))
+                    .then(({ ok, data }) => {
+                        if (!ok) throw new Error(data.message || "Request failed");
+                        location.reload();
+                    })
+                    .catch(error => {
+                        console.error("Error changing status:", error);
+                        alert(error.message || "Error changing status.");
                     });
             });
         });
