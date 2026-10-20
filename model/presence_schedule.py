@@ -8,9 +8,8 @@ date, for one room or for every room, so special days (minimum days,
 assemblies, no school) need no code change. A manually started period still
 takes precedence over all of this (see api/presence_api.py).
 
-Block times are local wall-clock times in the schedule's timezone (or
-PRESENCE_TIMEZONE, default America/Los_Angeles), since the server may run in
-UTC (e.g. in Docker). Timestamps elsewhere are stored as naive UTC.
+Block times are local wall-clock times in the schedule's timezone (default
+America/Los_Angeles), since the server may run in UTC (e.g. in Docker). Timestamps elsewhere are stored as naive UTC.
 
 The first schedules come from model/presence_schedules.json via
 seed_schedules(), which only runs when no schedules exist yet.
@@ -23,7 +22,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from __init__ import db
 
-DEFAULT_TIMEZONE = os.environ.get("PRESENCE_TIMEZONE") or "America/Los_Angeles"
+DEFAULT_TIMEZONE = "America/Los_Angeles"  # for schedules that do not set their own
 DEFAULT_GRACE_SECONDS = 300
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")  # index = date.weekday()
 SEED_FILE = os.path.join(os.path.dirname(__file__), "presence_schedules.json")

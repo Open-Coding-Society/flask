@@ -1,5 +1,5 @@
 {
-  "_comment": "Seed schedules for the presence system, loaded by model/presence_schedule.py seed_schedules() when no schedules exist yet. After that, edit schedules through /api/presence/schedules. Times are local (HH:MM, 24-hour) in the schedule's timezone; null timezone means PRESENCE_TIMEZONE (default America/Los_Angeles). Source for Del Norte: https://delnorte.powayusd.com/apps/bell_schedules/ (regular weeks only; special days go in schedule overrides). The 300-second grace is a reasonable default, not an official tardy policy.",
+  "_comment": "Seed schedules for the presence system, loaded by model/presence_schedule.py seed_schedules() when no schedules exist yet. After that, edit schedules through /api/presence/schedules. Times are local (HH:MM, 24-hour) in the schedule's timezone; null timezone means America/Los_Angeles. Source for Del Norte: https://delnorte.powayusd.com/apps/bell_schedules/ (regular weeks only; special days go in schedule overrides). The 300-second grace is a reasonable default, not an official tardy policy.",
   "schedules": [
     {
       "name": "Del Norte Regular",

@@ -104,8 +104,6 @@ pip install -r requirements.txt
   RFID_API_KEY=xxxxx
   # Optional: true once the camera posts face-check results (default false = "RFID only")
   CAMERA_ENABLED=false
-  # Optional: default timezone for presence schedules that do not set their own
-  PRESENCE_TIMEZONE=America/Los_Angeles
   # DB Configuration, AWS RDS
   IS_PRODUCTION=false # false = LOCAL true = DEPLOYED
   DB_USERNAME='admin'
