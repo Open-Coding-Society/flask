@@ -1,0 +1,215 @@
+# Presence system walkthrough (rooms, schedules, RFID taps, status).
+# Select the REST Client environment, then send each numbered request top to bottom,
+# checking the expected status in its heading. Reader requests prompt for the device
+# key (RFID_API_KEY in the server's .env); never write it into this file.
+# Creates real rows in the selected environment: a room, a schedule, a tag, and taps.
+@roomName = Presence Demo Room
+@scheduleName = Presence Demo Schedule
+@tagUid = 1234567890
+
+### 1. Authenticate as an Admin or Teacher (expect 200)
+# @name login
+# @prompt uid Enter an Admin or Teacher user ID
+# @prompt password Enter your password
+POST {{baseUrl}}/api/authenticate
+Content-Type: application/json
+Accept: application/json
+
+{
+  "uid": "{{uid}}",
+  "password": "{{password}}"
+}
+
+### 2. List schedules (expect 200; includes the seeded "Del Norte Regular")
+GET {{baseUrl}}/api/presence/schedules
+Accept: application/json
+
+### 3. Create a schedule (expect 201; 409 with the existing id if it already exists)
+# @name createSchedule
+POST {{baseUrl}}/api/presence/schedules
+Content-Type: application/json
+Accept: application/json
+
+{
+  "name": "{{scheduleName}}",
+  "timezone": "America/Los_Angeles",
+  "grace_seconds": 300,
+  "blocks": [
+    {"name": "Morning", "weekdays": "mon,tue,wed,thu,fri", "start": "09:00", "end": "10:30"},
+    {"name": "Afternoon", "weekdays": "mon,tue,wed,thu,fri", "start": "13:00", "end": "14:30"}
+  ]
+}
+
+### 4. Edit the schedule: replaces its blocks (expect 200)
+PUT {{baseUrl}}/api/presence/schedules/{{createSchedule.response.body.$.id}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "blocks": [
+    {"name": "Morning", "weekdays": "mon,tue,wed,thu,fri", "start": "09:00", "end": "11:00"}
+  ]
+}
+
+### 5. Create a room that follows the schedule, with you as a member (expect 201; 409 with the existing id if it exists)
+# @name createRoom
+POST {{baseUrl}}/api/presence/rooms
+Content-Type: application/json
+Accept: application/json
+
+{
+  "name": "{{roomName}}",
+  "description": "Created by api/presence.http",
+  "schedule_id": {{createSchedule.response.body.$.id}},
+  "member_uids": ["{{login.response.body.$.user.uid}}"]
+}
+
+### 6. List rooms (expect 200; includes the new room)
+GET {{baseUrl}}/api/presence/rooms
+Accept: application/json
+
+### 7. Register a tag to yourself, by uid (expect 201 new, 200 if it moves an existing tag)
+POST {{baseUrl}}/api/rfid/tags
+Content-Type: application/json
+Accept: application/json
+
+{
+  "tag_uid": "{{tagUid}}",
+  "uid": "{{login.response.body.$.user.uid}}"
+}
+
+### 8. Start a 30-minute manual period in the room; overrides its schedule (expect 201)
+POST {{baseUrl}}/api/presence/rooms/{{createRoom.response.body.$.id}}/periods
+Content-Type: application/json
+Accept: application/json
+
+{
+  "name": "Demo Period",
+  "duration_seconds": 1800
+}
+
+### 9. Tap, as the reader sends it (expect 200, event.type "enter")
+# @name tap
+# @prompt apiKey Enter the device key (RFID_API_KEY)
+POST {{baseUrl}}/api/rfid/scan
+Content-Type: application/json
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "event_id": "{{$guid}}",
+  "tag_uid": "{{tagUid}}",
+  "room_id": {{createRoom.response.body.$.id}},
+  "occurred_at": "{{$datetime iso8601}}",
+  "device_id": "presence-http"
+}
+
+### 10. Tap again: the same person toggles (expect 200, event.type "exit")
+# @prompt apiKey Enter the device key (RFID_API_KEY)
+POST {{baseUrl}}/api/presence/event
+Content-Type: application/json
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "event_id": "{{$guid}}",
+  "source": "rfid",
+  "tag_uid": "{{tagUid}}",
+  "room_id": {{createRoom.response.body.$.id}},
+  "occurred_at": "{{$datetime iso8601}}",
+  "device_id": "presence-http"
+}
+
+### 11a. Duplicate check, first send: a new tap (expect 200, "duplicate": false, type "enter")
+# @name dupFirst
+# @prompt apiKey Enter the device key (RFID_API_KEY)
+POST {{baseUrl}}/api/presence/event
+Content-Type: application/json
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "event_id": "{{$guid}}",
+  "source": "rfid",
+  "tag_uid": "{{tagUid}}",
+  "room_id": {{createRoom.response.body.$.id}},
+  "occurred_at": "{{$datetime iso8601}}",
+  "device_id": "presence-http"
+}
+
+### 11b. Duplicate check, same event_id again: not counted twice (expect 200, "duplicate": true)
+# @prompt apiKey Enter the device key (RFID_API_KEY)
+POST {{baseUrl}}/api/presence/event
+Content-Type: application/json
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "event_id": "{{dupFirst.response.body.$.event.event_id}}",
+  "source": "rfid",
+  "tag_uid": "{{tagUid}}",
+  "room_id": {{createRoom.response.body.$.id}},
+  "occurred_at": "{{$datetime iso8601}}",
+  "device_id": "presence-http"
+}
+
+### 12. Wrong device key is rejected (expect 401 "Invalid or missing API key")
+POST {{baseUrl}}/api/presence/event
+Content-Type: application/json
+Accept: application/json
+X-API-Key: not-the-real-key
+
+{
+  "event_id": "{{$guid}}",
+  "source": "rfid",
+  "tag_uid": "{{tagUid}}",
+  "room_id": {{createRoom.response.body.$.id}},
+  "occurred_at": "{{$datetime iso8601}}"
+}
+
+### 13. Room status: you are PRESENT in "Demo Period", verification RFID_ONLY (expect 200)
+GET {{baseUrl}}/api/presence/rooms/{{createRoom.response.body.$.id}}/status
+Accept: application/json
+
+### 14. Room periods: the current period and recent ones (expect 200)
+GET {{baseUrl}}/api/presence/rooms/{{createRoom.response.body.$.id}}/periods
+Accept: application/json
+
+### 15. Room events, newest first (expect 200; the taps above)
+GET {{baseUrl}}/api/rfid/rooms/{{createRoom.response.body.$.id}}/events
+Accept: application/json
+
+### 16. Taps the camera has not checked yet, as the camera polls (expect 200)
+# @prompt apiKey Enter the device key (RFID_API_KEY)
+GET {{baseUrl}}/api/presence/rooms/{{createRoom.response.body.$.id}}/taps/pending
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+### 17. Schedule override: no periods in this room on a date, e.g. an assembly (expect 201)
+# @name override
+POST {{baseUrl}}/api/presence/schedules/overrides
+Content-Type: application/json
+Accept: application/json
+
+{
+  "date": "2030-01-02",
+  "room_id": {{createRoom.response.body.$.id}},
+  "schedule_id": null,
+  "note": "Assembly, no periods"
+}
+
+### 18. List overrides from a date onward (expect 200; includes the override)
+GET {{baseUrl}}/api/presence/schedules/overrides?from=2030-01-01
+Accept: application/json
+
+### 19. Delete the override (expect 200)
+DELETE {{baseUrl}}/api/presence/schedules/overrides/{{override.response.body.$.id}}
+Accept: application/json
+
+### 20. Unknown presence path answers in JSON, not an HTML page (expect 404 JSON)
+GET {{baseUrl}}/api/presence/classrooms/1/status
+Accept: application/json
+
+### 21. Cleanup: remove the demo tag (expect 200). The room keeps its taps, so it is not deleted.
+DELETE {{baseUrl}}/api/rfid/tags/{{tagUid}}
+Accept: application/json

@@ -15,25 +15,89 @@ def to_iso_z(dt):
     return dt.isoformat(timespec="milliseconds") + "Z"
 
 
+# Who belongs to a room. The status roster is these members plus anyone who
+# has produced a presence event in the room.
+presence_room_members = db.Table(
+    'presence_room_members',
+    db.Column('room_id', db.Integer, db.ForeignKey('presence_rooms.id'), primary_key=True),
+    db.Column('user_id', db.Integer, db.ForeignKey('users.id'), primary_key=True),
+)
+
+
+class PresenceRoom(db.Model):
+    """A place presence is tracked: a classroom, a club meeting, an event.
+    Deliberately generic, so it is not tied to a teacher or a school. A room
+    follows one schedule (model/presence_schedule.py), or none, in which case
+    only manually started periods count."""
+    __tablename__ = 'presence_rooms'
+
+    id = db.Column(db.Integer, primary_key=True)
+    _name = db.Column(db.String(120), unique=True, nullable=False)
+    _description = db.Column(db.String(255), nullable=True)
+    _schedule_id = db.Column(db.Integer, db.ForeignKey('presence_schedules.id'), nullable=True)
+    _created_at = db.Column(db.DateTime, nullable=False, default=lambda: utc_now())
+
+    schedule = db.relationship('PresenceSchedule')
+    members = db.relationship('User', secondary=presence_room_members, lazy='dynamic')
+
+    def __init__(self, name, description=None, schedule_id=None):
+        self._name = name
+        self._description = description
+        self._schedule_id = schedule_id
+
+    @property
+    def name(self): return self._name
+
+    @name.setter
+    def name(self, value): self._name = value
+
+    @property
+    def description(self): return self._description
+
+    @description.setter
+    def description(self, value): self._description = value
+
+    @property
+    def schedule_id(self): return self._schedule_id
+
+    @schedule_id.setter
+    def schedule_id(self, value): self._schedule_id = value
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self._name,
+            'description': self._description,
+            'schedule_id': self._schedule_id,
+            'schedule': self.schedule.name if self.schedule else None,
+            'member_uids': sorted(u.uid for u in self.members),
+            'created_at': to_iso_z(self._created_at),
+        }
+
+
 class PresencePeriod(db.Model):
-    """A class period that attendance events are counted against. "bell"
-    periods are derived from the school bell schedule on demand; "manual"
-    periods are started by a teacher/admin for demos or testing outside
-    school hours. Periods are school-wide; events carry the classroom."""
+    """A stretch of time in one room that presence events are counted
+    against. "scheduled" periods are created from the room's schedule the
+    first time they are needed; "manual" periods are started on demand by a
+    teacher/admin (e.g. a demo, or an event that is not on any schedule)."""
     __tablename__ = 'presence_periods'
 
     id = db.Column(db.Integer, primary_key=True)
+    _room_id = db.Column(db.Integer, db.ForeignKey('presence_rooms.id'), nullable=False)
     _name = db.Column(db.String(80), nullable=False)
     _start_time = db.Column(db.DateTime, nullable=False)
     _duration_seconds = db.Column(db.Integer, nullable=False)
     _grace_seconds = db.Column(db.Integer, nullable=False)
-    _source = db.Column(db.String(10), nullable=False)  # 'bell' or 'manual'
-    # Only meaningful for manual periods: the most recently started one stays
-    # current (even after it ends, so final states remain visible) until
-    # another is started.
+    _source = db.Column(db.String(10), nullable=False)  # 'scheduled' or 'manual'
+    # Only meaningful for manual periods: the room's most recently started one
+    # stays current (even after it ends, so final states remain visible) until
+    # another is started in that room.
     _active = db.Column(db.Boolean, nullable=False, default=False)
 
-    def __init__(self, name, start_time, duration_seconds, grace_seconds, source, active=False):
+    room = db.relationship('PresenceRoom')
+
+    def __init__(self, room_id, name, start_time, duration_seconds, grace_seconds, source, active=False):
+        self._room_id = room_id
         self._name = name
         self._start_time = start_time
         self._duration_seconds = duration_seconds
@@ -42,16 +106,25 @@ class PresencePeriod(db.Model):
         self._active = active
 
     @property
+    def room_id(self): return self._room_id
+
+    @property
     def name(self): return self._name
 
     @property
     def start_time(self): return self._start_time
 
     @property
+    def duration_seconds(self): return self._duration_seconds
+
+    @property
     def grace_seconds(self): return self._grace_seconds
 
     @property
     def source(self): return self._source
+
+    @property
+    def active(self): return self._active
 
     @property
     def end_time(self):
@@ -63,6 +136,7 @@ class PresencePeriod(db.Model):
     def to_dict(self, now=None):
         data = {
             'id': self.id,
+            'room_id': self._room_id,
             'name': self.name,
             'start_time': to_iso_z(self.start_time),
             'end_time': to_iso_z(self.end_time),
@@ -76,9 +150,9 @@ class PresencePeriod(db.Model):
 
 class PresenceEvent(db.Model):
     """One presence signal from any input (RFID tap, later camera),
-    resolved to a user and a classroom. occurred_at is when it happened on
-    the device; received_at is when the server got it. type is derived by
-    the server: 'enter'/'exit' toggle within a period, or 'ignored' when the
+    resolved to a user and a room. occurred_at is when it happened on the
+    device; received_at is when the server got it. type is derived by the
+    server: 'enter'/'exit' toggle within a period, or 'ignored' when the
     event falls outside every period window (logged, not counted)."""
     __tablename__ = 'presence_events'
 
@@ -86,7 +160,7 @@ class PresenceEvent(db.Model):
     _event_id = db.Column(db.String(64), unique=True, nullable=False)
     _source = db.Column(db.String(10), nullable=False)  # 'rfid', later 'camera'
     _user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    _classroom_id = db.Column(db.Integer, db.ForeignKey('classrooms.id'), nullable=False)
+    _room_id = db.Column(db.Integer, db.ForeignKey('presence_rooms.id'), nullable=False)
     _period_id = db.Column(db.Integer, db.ForeignKey('presence_periods.id'), nullable=True)
     _type = db.Column(db.String(10), nullable=False)  # 'enter', 'exit', 'ignored'
     _occurred_at = db.Column(db.DateTime, nullable=False, index=True)
@@ -95,15 +169,15 @@ class PresenceEvent(db.Model):
     _device_id = db.Column(db.String(64), nullable=True)
 
     user = db.relationship('User')
-    classroom = db.relationship('Classroom')
+    room = db.relationship('PresenceRoom')
     period = db.relationship('PresencePeriod')
 
-    def __init__(self, event_id, source, user_id, classroom_id, period_id, type,
+    def __init__(self, event_id, source, user_id, room_id, period_id, type,
                  occurred_at, received_at, tag_uid=None, device_id=None):
         self._event_id = event_id
         self._source = source
         self._user_id = user_id
-        self._classroom_id = classroom_id
+        self._room_id = room_id
         self._period_id = period_id
         self._type = type
         self._occurred_at = occurred_at
@@ -118,6 +192,9 @@ class PresenceEvent(db.Model):
     def user_id(self): return self._user_id
 
     @property
+    def room_id(self): return self._room_id
+
+    @property
     def type(self): return self._type
 
     @property
@@ -130,7 +207,7 @@ class PresenceEvent(db.Model):
             'source': self._source,
             'uid': self.user.uid if self.user else None,
             'user_name': self.user.name if self.user else None,
-            'classroom_id': self._classroom_id,
+            'room_id': self._room_id,
             'type': self._type,
             'period': self.period.name if self.period else None,
             'occurred_at': to_iso_z(self._occurred_at),
