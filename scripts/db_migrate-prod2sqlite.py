@@ -388,7 +388,6 @@ def load_users(users_data):
                 sid=user_data.get('sid'),
                 role=user_data.get('role', 'User'),
                 pfp=user_data.get('pfp'),
-                kasm_server_needed=user_data.get('kasm_server_needed', False),
                 grade_data=user_data.get('grade_data') or user_data.get('gradeData'),
                 ap_exam=user_data.get('ap_exam') or user_data.get('apExam'),
                 school=user_data.get('school'),

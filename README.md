@@ -94,13 +94,6 @@ pip install -r requirements.txt
   GITHUB_TOKEN=ghp_xxx
   GITHUB_TARGET_TYPE=user  # Use 'organization' or 'user'
   GITHUB_TARGET_NAME=Open-Coding-Society
-  # KASM Configuration (server is defaulted)
-  KASM_SERVER=https://kasm.opencodingsociety.com
-  KASM_API_KEY_SECRET=xxxx
-  KASM_API_KEY=xxx
-  # Presence system (RFID tap readers), see api/presence.http
-  # Required on any server readers post to; readers send it as the X-API-Key header.
-  # Generate one: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
   RFID_API_KEY=xxxxx
   # Optional: true once the camera posts face-check results (default false = "RFID only")
   CAMERA_ENABLED=false
@@ -194,8 +187,6 @@ a student is also activated on their own when Google verifies their school email
 sign-up. Activating a Mentor covers the full 365 days; for other accounts a body of
 `{"days": N}` sets how long (30 by default). The example
 retains `dob`, but the create endpoint currently ignores it.
-`kasm_server_needed: true` requests Kasm provisioning; change it to `false`
-if you only want to exercise user CRUD without requesting a server.
 
 These are manual checks, not automated assertions. REST Client does not run
 all requests as an automated test sequence; a runner such as pytest or

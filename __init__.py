@@ -152,12 +152,6 @@ app.config['GEMINI_SERVER'] = os.environ.get('GEMINI_SERVER') or 'https://genera
 app.config['GEMINI_API_KEY'] = os.environ.get('GEMINI_API_KEY') or None
 
 
-# KASM settings
-app.config['KASM_SERVER'] = os.environ.get('KASM_SERVER') or 'https://kasm.opencodingsociety.com'
-app.config['KASM_API_KEY'] = os.environ.get('KASM_API_KEY') or None
-app.config['KASM_API_KEY_SECRET'] = os.environ.get('KASM_API_KEY_SECRET') or None
-
-
 # GROQ API settings
 app.config['GROQ_SERVER'] = os.environ.get('GROQ_SERVER') or 'https://api.groq.com/openai/v1/chat/completions'
 app.config['GROQ_API_KEY'] = os.environ.get('GROQ_API_KEY') or None
