@@ -373,13 +373,17 @@ class User(db.Model, UserMixin):
         Admin may change an Admin's. Whatever role the account has now."""
         return self.id != actor.id and (actor.is_admin() or not self.is_admin())
 
+    def grantable_roles(self):
+        """The roles this account may give to another account. Only an Admin may grant Admin."""
+        return tuple(r for r in account_types.assignable_roles() if r != "Admin" or self.is_admin())
+
     def role_change_blocker(self, actor, new_role):
         """None if actor may set this account's role to new_role, else (HTTP status, reason)."""
         if new_role not in account_types.assignable_roles():
             return 400, f"role must be one of: {', '.join(account_types.assignable_roles())}"
         if self.id == actor.id:
             return 403, "You cannot change your own role"
-        if not self.role_editable_by(actor) or (new_role == "Admin" and not actor.is_admin()):
+        if not self.role_editable_by(actor) or new_role not in actor.grantable_roles():
             return 403, "Only an Admin can change an Admin's role or make someone an Admin"
         if new_role != self.role and self.is_last_active_essential():
             return 409, f"At least one active {self.role} account must remain"

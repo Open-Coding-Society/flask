@@ -116,7 +116,7 @@
             <div class="modal-body">
                 <label for="roleSelect" class="form-label">New role for <strong id="roleModalUid"></strong></label>
                 <select id="roleSelect" class="form-select">
-                    {% for role in role_options if role != 'Admin' or current_user.role == 'Admin' %}
+                    {% for role in role_options %}
                     <option value="{{ role }}">{{ role }}</option>
                     {% endfor %}
                 </select>
