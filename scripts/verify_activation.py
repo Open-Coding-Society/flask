@@ -17,7 +17,7 @@ sys.path.insert(0, REPO)
 os.environ.setdefault("SECRET_KEY", "verify-activation")
 
 REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
-PASSWORD = secrets.token_urlsafe(16)  # new every run; the accounts live only in a throwaway database
+PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run, with one of each character class; the accounts live only in a throwaway database
 CLIENT_ID, GOOD = "test-client-id", "good-token"
 MIGRATION_SQL = [
     "ALTER TABLE users ADD COLUMN active BOOLEAN NOT NULL DEFAULT 0",
