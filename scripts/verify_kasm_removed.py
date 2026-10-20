@@ -8,7 +8,7 @@ prove it was never touched.
 Usage:  python scripts/verify_kasm_removed.py        (from the flask repo root)
 Exit:   0 all checks passed, 1 otherwise.
 """
-import hashlib, importlib.util, os, sys, tempfile
+import hashlib, importlib.util, os, secrets, sys, tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(REPO)
@@ -16,7 +16,7 @@ sys.path.insert(0, REPO)
 os.environ.setdefault("SECRET_KEY", "verify-kasm-removed")
 
 REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
-PASSWORD = "Passw0rd!123"
+PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run, with one of each character class; the accounts live only in a throwaway database
 _failures = []
 
 
