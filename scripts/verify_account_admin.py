@@ -279,6 +279,22 @@ def main():
           actions(html_a2, "zz_teacher") == [] and "delete-btn" not in row(html_a2, "zz_teacher"))
     set_active("zz_teacher2", True)
 
+    # the table asks the user who they are (is_admin, is_teacher); it does not name roles itself
+    with open(os.path.join(REPO, "templates", "u2table.html"), encoding="utf-8") as fh:
+        named = re.findall(r"""['"](?:Admin|Teacher|Mentor|User)['"]""", fh.read())
+    check("the table template names no roles", not named, str(named))
+
+    # who counts as staff comes from the data (model/account_types.json), not from code
+    changed = copy.deepcopy(account_types._data)
+    changed["staff_roles"] = ["Teacher"]
+    with app.app_context():
+        admin = User.query.filter_by(_uid="zz_admin").first()
+        staff_by_default = admin.is_staff()
+        with patch.object(account_types, "_data", changed):
+            staff_when_changed = admin.is_staff()
+    check("staff follow the data: an Admin is staff by default, not once the data drops Admin",
+          staff_by_default is True and staff_when_changed is False, f"{staff_by_default} {staff_when_changed}")
+
     after = sha256(REAL_DB) if os.path.exists(REAL_DB) else None
     check("real dev DB untouched", real_before == after)
     print("\nALL PASSED" if not _failures else f"\nFAILURES: {_failures}")
