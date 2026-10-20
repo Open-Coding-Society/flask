@@ -7,7 +7,7 @@ real dev DB before and after to prove it was never touched.
 Usage:  python scripts/verify_activation.py        (from the flask repo root)
 Exit:   0 all checks passed, 1 otherwise.
 """
-import copy, hashlib, os, shutil, sys, tempfile
+import copy, hashlib, os, secrets, shutil, sys, tempfile
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -17,7 +17,8 @@ sys.path.insert(0, REPO)
 os.environ.setdefault("SECRET_KEY", "verify-activation")
 
 REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
-PASSWORD, CLIENT_ID, GOOD = "Passw0rd!123", "test-client-id", "good-token"
+PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run, with one of each character class; the accounts live only in a throwaway database
+CLIENT_ID, GOOD = "test-client-id", "good-token"
 MIGRATION_SQL = [
     "ALTER TABLE users ADD COLUMN active BOOLEAN NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN last_verified DATETIME NULL",
@@ -166,11 +167,9 @@ def main():
             r = c.post("/api/user/admin-create", json=dict(name="Staff Made", uid="zz_made_student",
                                                            password=PASSWORD, accountType="student"))
             check("admin-create does not create students", r.status_code == 400 and get("zz_made_student") is None)
-            before = get("zz_no_token")
             r = c.post("/api/user/zz_no_token/verify")
-            check("a Teacher cannot verify a student; they use Google sign-in",
-                  r.status_code == 400 and get("zz_no_token")["active"] == before["active"] is False,
-                  f"{r.status_code} {get('zz_no_token')}")
+            check("a Teacher can verify and activate a student",
+                  r.status_code == 200 and get("zz_no_token")["active"] is True, f"{r.status_code} {get('zz_no_token')}")
             for bad in ("teacher", "admin", ""):
                 r = c.post("/api/user/admin-create", json=dict(name="Bad Role", uid="zz_bad_" + (bad or "x"),
                                                                password=PASSWORD, accountType=bad))

@@ -6,8 +6,8 @@
 # @name createUser
 # @note Creates a real account in the selected environment and requests Kasm provisioning. Check testUid first.
 # dob is included from the example, but the current create endpoint ignores it.
-# accountType mentor creates an inactive Mentor, activated in step 1b. A student is not activated by staff:
-# a student becomes active when Google verifies their school email at sign-up.
+# accountType mentor creates an inactive Mentor, activated in step 1b. A Teacher or Admin can activate any
+# account; a student is also activated by Google at sign-up.
 POST {{baseUrl}}/api/user
 Content-Type: application/json
 Accept: application/json

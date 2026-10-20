@@ -325,18 +325,27 @@ class User(db.Model, UserMixin):
     def is_teacher(self):
         return self._role == "Teacher"
 
+    def is_staff(self):
+        """True for the roles that manage accounts (staff_roles in account_types.json)."""
+        return self.role in account_types.staff_roles()
+
     @property
     def verification_state(self):
         if not self.active:
             return "inactive"
+        if self.role in account_types.verification_exempt_roles():
+            return "active_verified"  # never re-verified
         if self.last_verified is None or datetime.utcnow() - self.last_verified >= timedelta(days=account_types.verification_interval_days()):
             return "active_verification_required"
         return "active_verified"
 
-    def activate(self):
-        """Verify the account: mark it active and record when."""
+    def activate(self, days=None):
+        """Verify the account: mark it active and record when. days is how long the verification
+        should last, up to the full interval; without it, the full interval."""
+        interval = account_types.verification_interval_days()
+        used = interval if days is None else min(days, interval)
         self.active = True
-        self.last_verified = datetime.utcnow()
+        self.last_verified = datetime.utcnow() - timedelta(days=interval - used)
         db.session.commit()
         return self
     
@@ -359,6 +368,27 @@ class User(db.Model, UserMixin):
             return 409, f"At least one active {self.role} account must remain"
         return None
 
+    def role_editable_by(self, actor):
+        """True when actor may change this account's role at all: not their own, and only an
+        Admin may change an Admin's. Whatever role the account has now."""
+        return self.id != actor.id and (actor.is_admin() or not self.is_admin())
+
+    def grantable_roles(self):
+        """The roles this account may give to another account. Only an Admin may grant Admin."""
+        return tuple(r for r in account_types.assignable_roles() if r != "Admin" or self.is_admin())
+
+    def role_change_blocker(self, actor, new_role):
+        """None if actor may set this account's role to new_role, else (HTTP status, reason)."""
+        if new_role not in account_types.assignable_roles():
+            return 400, f"role must be one of: {', '.join(account_types.assignable_roles())}"
+        if self.id == actor.id:
+            return 403, "You cannot change your own role"
+        if not self.role_editable_by(actor) or new_role not in actor.grantable_roles():
+            return 403, "Only an Admin can change an Admin's role or make someone an Admin"
+        if new_role != self.role and self.is_last_active_essential():
+            return 409, f"At least one active {self.role} account must remain"
+        return None
+
     def deletion_blocker(self, actor):
         """None if actor may delete this account, else (HTTP status, reason)."""
         if not (actor.is_admin() and actor.active):
@@ -370,14 +400,17 @@ class User(db.Model, UserMixin):
         return None
 
     @property
-    def staff_verifies(self):
-        """True when a Teacher/Admin verifies this account, False when Google sign-in does."""
-        return self.role not in account_types.oauth_roles()
-
-    @property
     def verification_due(self):
         """True while the account is inactive or its verification has lapsed."""
         return self.verification_state != "active_verified"
+
+    @property
+    def verification_prompt_days(self):
+        """The suggested days to ask a Teacher/Admin for when they activate this account, or None
+        when the answer is not theirs to choose (a fixed period, or a role never re-verified)."""
+        if account_types.fixed_verification_days(self.role) is not None:
+            return None
+        return account_types.default_verification_days()
 
     # getter method for profile picture
     @property

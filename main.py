@@ -196,7 +196,7 @@ def index():
 @login_required
 def u2table():
     users = User.query.all()
-    return render_template("u2table.html", user_data=users)
+    return render_template("u2table.html", user_data=users, role_options=current_user.grantable_roles())
 
 @app.route('/sections/')
 @login_required
