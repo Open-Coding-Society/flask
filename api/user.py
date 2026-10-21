@@ -920,8 +920,8 @@ class UserAPI:
             name, uid, password = body.get('name'), body.get('uid'), body.get('password')
             if role is None:
                 return {'message': f"accountType must be one of: {', '.join(allowed)}"}, 400
-            if not name or not uid or not password or len(password) < 8:
-                return {'message': 'name, uid and a password of at least 8 characters are required'}, 400
+            if not name or not uid or not password:
+                return {'message': 'name, uid and password are required'}, 400
             user = User(name=name, uid=uid, password=password, role=role).create(
                 {'email': body['email']} if body.get('email') else None)
             if not user:
