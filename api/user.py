@@ -509,7 +509,11 @@ class UserAPI:
                                 "uid": user._uid,
                                 "name": user.name,
                                 "role": user.role,
-                                "class": user._class if getattr(user, '_class', None) is not None else []
+                                "class": user._class if getattr(user, '_class', None) is not None else [],
+                                "active": user.active,
+                                "verification_state": user.verification_state,
+                                "verification_required": user.verification_state == "active_verification_required",
+                                "verified_by_google": bool(account_types.google_domains(user.role))
                             }
                         }
                         resp = jsonify(response_data)
