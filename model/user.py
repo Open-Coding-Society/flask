@@ -305,11 +305,14 @@ class User(db.Model, UserMixin):
 
     # set password, this is conventional setter with business logic
     def set_password(self, password):
-        """Set password: hash if not already hashed, else set directly."""
+        """Set password: hash if not already hashed, else set directly.
+        A new plaintext password must follow PASSWORD_RULE or WeakPasswordError is raised."""
         if password and password.startswith("pbkdf2:sha256:"):
-            # Already hashed, set directly
+            # Already hashed (backup restore, bulk import), set directly
             new_hash = password
         else:
+            if not meets_password_rule(password):
+                raise WeakPasswordError()
             # Not hashed, hash it
             new_hash = generate_password_hash(password, "pbkdf2:sha256", salt_length=10)
 
