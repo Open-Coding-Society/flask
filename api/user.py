@@ -782,10 +782,8 @@ class UserAPI:
             if uid is None or len(uid) < 2:
                 return {'message': 'Username is missing, or is less than 2 characters'}, 400
 
-            # Validate password (relaxed requirement for guests)
+            # Guests follow the same password rule as everyone else (checked in the model)
             password = body.get('password')
-            if password is None or len(password) < 2:
-                return {'message': 'Password is missing, or is less than 2 characters'}, 400
 
             # Auto-generate required fields for guest accounts
             name = f"Guest_{uid}"
