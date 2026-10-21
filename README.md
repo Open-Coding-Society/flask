@@ -57,7 +57,7 @@ pip install -r requirements.txt
   - From Extensions Marketplace install `SQLite3 Editor`
     - Open and view SQL database file `instance/volumes/user_management.db`
 
-  - Make a local `.env` file in root of project to contain your secret passwords
+  - Make a local `.env` file in root of project to contain your secret passwords. Every password must follow the same rule as Spring (8+ characters with an uppercase letter, a lowercase letter, a number, and one of `` ` ~ ! @ # $ % ^ & * ( ) ``), or the model rejects it when it seeds that account. Run `python scripts/verify_password_rule.py` to check.
 
   ```shell
   # Port configuration
