@@ -8,7 +8,7 @@ from flask_restful import Api, Resource # used for REST API building
 from datetime import datetime, timedelta
 from __init__ import app, db
 from api.authorize import token_required
-from model.user import User
+from model.user import User, meets_password_rule, WeakPasswordError
 from model import account_types
 from model.google_token import verified_google_email
 from model.github import GitHubUser
@@ -843,8 +843,9 @@ class UserAPI:
 
             if not uid or not reset_token or not password:
                 return {'message': 'uid, resetToken, and newPassword are required'}, 400
-            if len(password) < 8:
-                return {'message': 'Password must be at least 8 characters'}, 400
+            # Check the rule before the single-use token gets spent on a weak password
+            if not meets_password_rule(password):
+                raise WeakPasswordError()
             if not _consume_reset_token(uid, reset_token):
                 return {'message': 'Invalid, expired, or already-used reset token'}, 403
 
