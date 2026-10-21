@@ -621,6 +621,9 @@ class User(db.Model, UserMixin):
         ap_exam = inputs.get("ap_exam", None)
         class_list = inputs.get("class", None) or inputs.get("_class", None)
         school = inputs.get("school", None)
+        # Password goes first: if the model rejects it, nothing else has changed yet.
+        if password:
+            self.set_password(password)
         # Update table with new data
         if name:
             self.name = name
@@ -630,8 +633,6 @@ class User(db.Model, UserMixin):
             self.email = email
         if sid:
             self.sid = sid
-        if password:
-            self.set_password(password)
         if pfp is not None:
             self.pfp = pfp
         if grade_data is not None:
