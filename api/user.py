@@ -292,7 +292,7 @@ class UserAPI:
             for user in users:
                 user_data = _without_password(user.read())
                 # Add access control
-                if current_user.role == 'Admin' or current_user.id == user.id:
+                if current_user.is_admin() or current_user.id == user.id:
                     user_data['access'] = ['rw'] # read-write access control 
                 else:
                     user_data['access'] = ['ro'] # read-only access control 
@@ -330,7 +330,7 @@ class UserAPI:
             body = request.get_json()
 
             ''' Admin-specific update handling '''
-            if current_user.role == 'Admin':
+            if current_user.is_admin():
                 uid = body.get('uid')
                 # Admin is updating themself
                 if uid is None or uid == current_user.uid:
@@ -356,7 +356,7 @@ class UserAPI:
             # return response, the updated user details as a JSON object
             return jsonify(_without_password(user.read()))
         
-        @token_required("Admin")
+        @token_required(account_types.admin_role())
         def delete(self):
             """
             Delete a user.
@@ -615,7 +615,7 @@ class UserAPI:
             
             # If request includes a UID parameter and user is admin, get that user's grade data
             uid = request.args.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
@@ -634,13 +634,13 @@ class UserAPI:
             
             # Determine which user's grade data to update
             uid = body.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
             else:
                 # Non-admins can only update their own grade data
-                if uid and uid != current_user.uid and current_user.role != 'Admin':
+                if uid and uid != current_user.uid and not current_user.is_admin():
                     return {'message': 'Permission denied: You can only update your own grade data'}, 403
                 user = current_user
             
@@ -668,7 +668,7 @@ class UserAPI:
             
             # If request includes a UID parameter and user is admin, get that user's AP exam data
             uid = request.args.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
@@ -687,13 +687,13 @@ class UserAPI:
             
             # Determine which user's AP exam data to update
             uid = body.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
             else:
                 # Non-admins can only update their own AP exam data
-                if uid and uid != current_user.uid and current_user.role != 'Admin':
+                if uid and uid != current_user.uid and not current_user.is_admin():
                     return {'message': 'Permission denied: You can only update your own AP exam data'}, 403
                 user = current_user
             
@@ -721,7 +721,7 @@ class UserAPI:
 
             # If request includes a UID parameter and user is admin, get that user's school data
             uid = request.args.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
@@ -740,13 +740,13 @@ class UserAPI:
 
             # Determine which user's school data to update
             uid = body.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
             else:
                 # Non-admins can only update their own school data
-                if uid and uid != current_user.uid and current_user.role != 'Admin':
+                if uid and uid != current_user.uid and not current_user.is_admin():
                     return {'message': 'Permission denied: You can only update your own school data'}, 403
                 user = current_user
 
@@ -866,7 +866,7 @@ class UserAPI:
         How long that covers is fixed for some roles (see model/account_types.json); for the
         others the optional JSON body {"days": N} says (1 up to the full interval), and
         default_verification_days applies when it is left out."""
-        @token_required(["Teacher", "Admin"])
+        @token_required(account_types.staff_roles())
         def post(self, uid):
             target = User.query.filter_by(_uid=uid).first()
             if target is None:
@@ -884,7 +884,7 @@ class UserAPI:
 
     class _DeactivateAccount(Resource):
         """Teacher/Admin marks an account inactive. The account and its data are kept."""
-        @token_required(["Teacher", "Admin"])
+        @token_required(account_types.staff_roles())
         def post(self, uid):
             target = User.query.filter_by(_uid=uid).first()
             if target is None:
@@ -895,9 +895,9 @@ class UserAPI:
             return jsonify(_without_password(target.deactivate().read()))
 
     class _ChangeRole(Resource):
-        """Teacher/Admin changes another account's role: POST {"role": "Mentor"}. Only an Admin can
+        """Teacher/Admin changes another account's role: POST {"role": <a role from account_types.json>}. Only an Admin can
         make someone an Admin or change an Admin's role; nobody changes their own role."""
-        @token_required(["Teacher", "Admin"])
+        @token_required(account_types.staff_roles())
         def post(self, uid):
             target = User.query.filter_by(_uid=uid).first()
             if target is None:
@@ -915,7 +915,7 @@ class UserAPI:
         """Teacher/Admin creates an account of a staff-created type (see
         model/account_types.json). The account starts inactive and follows the same
         verification step as a self-created one."""
-        @token_required(["Teacher", "Admin"])
+        @token_required(account_types.staff_roles())
         def post(self):
             body = request.get_json(silent=True) or {}
             allowed = account_types.staff_created()
@@ -958,7 +958,7 @@ class UserAPI:
         def get(self):
             current_user = g.current_user
             uid = request.args.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
@@ -973,7 +973,7 @@ class UserAPI:
             current_user = g.current_user
             body = request.get_json() or {}
             uid = body.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
@@ -1017,7 +1017,7 @@ class UserAPI:
             current_user = g.current_user
             body = request.get_json() or {}
             uid = body.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
