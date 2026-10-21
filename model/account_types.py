@@ -46,7 +46,7 @@ def get(name):
 def google_domains(role):
     """The email domains Google can verify for accounts of this role. Empty when staff verify
     them instead."""
-    return tuple(d for t in _data["account_types"].values() if t["role"] == role for d in t["google_verified_domains"])
+    return tuple(d for t in _data["account_types"].values() if t["role"] == role for d in t.get("google_verified_domains", ()))
 
 
 def verification_exempt_roles():

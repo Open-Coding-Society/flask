@@ -502,6 +502,7 @@ class UserAPI:
                         # Return JSON response with cookie
                         is_production = os.environ.get('IS_PRODUCTION', 'false').lower() == 'true'
                         
+                        state = user.verification_state
                         # Create JSON response
                         response_data = {
                             "message": f"Authentication for {user._uid} successful",
@@ -511,8 +512,8 @@ class UserAPI:
                                 "role": user.role,
                                 "class": user._class if getattr(user, '_class', None) is not None else [],
                                 "active": user.active,
-                                "verification_state": user.verification_state,
-                                "verification_required": user.verification_state == "active_verification_required",
+                                "verification_state": state,
+                                "verification_required": state == "active_verification_required",
                                 "verified_by_google": bool(account_types.google_domains(user.role))
                             }
                         }
