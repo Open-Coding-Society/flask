@@ -460,6 +460,14 @@ def main():
             when_changed = (admin.is_admin(), principal.is_admin())
     check("the Admin role follows the data: Admin is the admin by default, Principal once the data says so",
           by_default == (True, False) and when_changed == (False, True), f"{by_default} {when_changed}")
+    typo = copy.deepcopy(account_types._data)
+    typo["admin_role"] = "Admn"
+    try:
+        account_types._check(typo)
+        refused = False
+    except ValueError:
+        refused = True
+    check("an admin_role that is not one of the staff roles is refused at startup", refused)
 
     # who counts as staff comes from the data (model/account_types.json), not from code
     changed = copy.deepcopy(account_types._data)

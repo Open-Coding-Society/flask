@@ -22,16 +22,23 @@ import json
 import os
 
 
-def _read():
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "account_types.json")
-    with open(path) as fh:
-        data = json.load(fh)
+def _check(data):
+    """Refuse data that would leave nobody able to administer, so a typo fails at startup."""
     if data["default_account_type"] not in data["account_types"]:
         raise ValueError("account_types.json: default_account_type is not a listed account type")
     for key in ("verification_interval_days", "default_verification_days", "verification_exempt_roles",
                 "admin_role", "essential_roles", "staff_roles"):
         if key not in data:
             raise ValueError(f"account_types.json: {key} is missing")
+    if data["admin_role"] not in data["staff_roles"]:
+        raise ValueError("account_types.json: admin_role must be one of the staff_roles")
+
+
+def _read():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "account_types.json")
+    with open(path) as fh:
+        data = json.load(fh)
+    _check(data)
     return data
 
 

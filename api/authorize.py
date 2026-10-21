@@ -21,7 +21,7 @@ def auth_required(roles=None):
       - JWT token authentication is fallback (stateless, works for APIs)
     
     Args:
-        roles: String or list of allowed roles (e.g., "Admin" or ["Admin", "Teacher"])
+        roles: String, list or tuple of allowed roles (e.g., "Admin" or ["Admin", "Teacher"])
                If None, any authenticated user is allowed
     
     Possible error responses:

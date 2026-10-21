@@ -847,7 +847,7 @@ def initUsers():
             'last_updated': None
         }
 
-        u1 = User(name=app.config['ADMIN_USER'], uid=app.config['ADMIN_UID'], password=app.config['ADMIN_PASSWORD'], pfp=app.config['ADMIN_PFP'], role="Admin")
+        u1 = User(name=app.config['ADMIN_USER'], uid=app.config['ADMIN_UID'], password=app.config['ADMIN_PASSWORD'], pfp=app.config['ADMIN_PFP'], role=account_types.admin_role())
         u2 = User(name=app.config['USER_NAME'], uid=app.config['USER_UID'], password=app.config['USER_PASSWORD'], pfp=app.config['USER_PFP'])
         u3 = User(name=app.config['TEACHER_USER'], uid=app.config['TEACHER_UID'], pfp=app.config['TEACHER_PFP'], password=app.config['TEACHER_PASSWORD'], role='Teacher')
         u4 = User(name=app.config['MY_NAME'], uid=app.config['MY_UID'], pfp=app.config['MY_PFP'], password=app.config['MY_PASSWORD'], role=app.config['MY_ROLE'])
