@@ -115,7 +115,7 @@ def auth_required(roles=None):
             # Now check role requirements if specified
             if roles:
                 # Normalize roles to list for consistent checking
-                required_roles = roles if isinstance(roles, list) else [roles]
+                required_roles = list(roles) if isinstance(roles, (list, tuple)) else [roles]
                 
                 if user.role not in required_roles:
                     return {

@@ -1,5 +1,6 @@
 {
   "verification_interval_days": 365,
+  "admin_role": "Admin",
   "essential_roles": ["Admin", "Teacher"],
   "staff_roles": ["Teacher", "Admin"],
   "default_verification_days": 30,

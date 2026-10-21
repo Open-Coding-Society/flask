@@ -316,7 +316,7 @@ class User(db.Model, UserMixin):
         self._role = role
 
     def is_admin(self):
-        return self._role == "Admin"
+        return self._role == account_types.admin_role()
 
     def is_teacher(self):
         return self._role == "Teacher"
@@ -371,7 +371,7 @@ class User(db.Model, UserMixin):
 
     def grantable_roles(self):
         """The roles this account may give to another account. Only an Admin may grant Admin."""
-        return tuple(r for r in account_types.assignable_roles() if r != "Admin" or self.is_admin())
+        return tuple(r for r in account_types.assignable_roles() if r != account_types.admin_role() or self.is_admin())
 
     def role_change_blocker(self, actor, new_role):
         """None if actor may set this account's role to new_role, else (HTTP status, reason)."""
