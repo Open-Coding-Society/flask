@@ -194,8 +194,7 @@ class UserAPI:
             #1: Setup minimal User object using __init__ method
             password = body.get('password')
             if password is not None:
-                if len(password) < 8 and not password.startswith("pbkdf2:sha256:"):
-                    return {'message': 'Password must be at least 8 characters'}, 400
+                # The model rejects a password that breaks the rule (WeakPasswordError -> 400).
                 user_obj = User(name=name, uid=uid, password=password, role=role)
             else:
                 user_obj = User(name=name, uid=uid, role=role)
