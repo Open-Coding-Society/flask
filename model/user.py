@@ -4,12 +4,35 @@ from flask_login import UserMixin
 from datetime import date, datetime, timedelta
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.exceptions import BadRequest
 import os
 import json
+import re
 
 from __init__ import app, db
 from model import account_types
 from model.github import GitHubUser
+
+""" Password Rule """
+
+# The one password rule for every account. Same as Spring's Person.checkPassword()
+# and pages' assets/js/api/passwordRules.js: 8+ characters with an uppercase letter,
+# a lowercase letter, a number, and one of ` ~ ! @ # $ % ^ & * ( )
+PASSWORD_RULE = 'Password needs 8+ characters with an uppercase letter, a lowercase letter, a number, and one of ` ~ ! @ # $ % ^ & * ( )'
+_PASSWORD_CHECKS = (r'[A-Z]', r'[a-z]', r'[0-9]', r'[`~!@#$%^&*()]')
+
+
+class WeakPasswordError(BadRequest):
+    """Raised by the model when a new password breaks the rule. It is a 400, so the
+    API sends back {"message": PASSWORD_RULE} without any route handling it."""
+    description = PASSWORD_RULE
+
+
+def meets_password_rule(password):
+    """True when a plaintext password follows PASSWORD_RULE."""
+    return (isinstance(password, str) and len(password) >= 8
+            and all(re.search(check, password) for check in _PASSWORD_CHECKS))
+
 
 """ Helper Functions """
 
