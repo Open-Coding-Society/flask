@@ -342,7 +342,7 @@ class User(db.Model, UserMixin):
         self._role = role
 
     def is_admin(self):
-        return self._role == "Admin"
+        return self._role == account_types.admin_role()
 
     def is_teacher(self):
         return self._role == "Teacher"
@@ -397,7 +397,7 @@ class User(db.Model, UserMixin):
 
     def grantable_roles(self):
         """The roles this account may give to another account. Only an Admin may grant Admin."""
-        return tuple(r for r in account_types.assignable_roles() if r != "Admin" or self.is_admin())
+        return tuple(r for r in account_types.assignable_roles() if r != account_types.admin_role() or self.is_admin())
 
     def role_change_blocker(self, actor, new_role):
         """None if actor may set this account's role to new_role, else (HTTP status, reason)."""
@@ -874,7 +874,7 @@ def initUsers():
             'last_updated': None
         }
 
-        u1 = User(name=app.config['ADMIN_USER'], uid=app.config['ADMIN_UID'], password=app.config['ADMIN_PASSWORD'], pfp=app.config['ADMIN_PFP'], role="Admin")
+        u1 = User(name=app.config['ADMIN_USER'], uid=app.config['ADMIN_UID'], password=app.config['ADMIN_PASSWORD'], pfp=app.config['ADMIN_PFP'], role=account_types.admin_role())
         u2 = User(name=app.config['USER_NAME'], uid=app.config['USER_UID'], password=app.config['USER_PASSWORD'], pfp=app.config['USER_PFP'])
         u3 = User(name=app.config['TEACHER_USER'], uid=app.config['TEACHER_UID'], pfp=app.config['TEACHER_PFP'], password=app.config['TEACHER_PASSWORD'], role='Teacher')
         u4 = User(name=app.config['MY_NAME'], uid=app.config['MY_UID'], pfp=app.config['MY_PFP'], password=app.config['MY_PASSWORD'], role=app.config['MY_ROLE'])

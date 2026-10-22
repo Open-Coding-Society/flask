@@ -224,7 +224,7 @@ def delete_user(user_id):
 @app.route('/users/reset_password/<int:user_id>', methods=['POST'])
 @login_required
 def reset_password(user_id):
-    if current_user.role != 'Admin':
+    if not current_user.is_admin():
         return jsonify({'error': 'Unauthorized'}), 403
     
     user = User.query.get(user_id)
@@ -239,7 +239,7 @@ def reset_password(user_id):
 @app.route('/update_user/<string:uid>', methods=['PUT'])
 def update_user(uid):
     # Authorization check
-    if current_user.role != 'Admin':
+    if not current_user.is_admin():
         return jsonify({'error': 'Unauthorized'}), 403
 
     # Get the JSON data from the request

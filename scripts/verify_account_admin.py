@@ -444,6 +444,30 @@ def main():
     with open(os.path.join(REPO, "templates", "u2table.html"), encoding="utf-8") as fh:
         named = re.findall(r"""['"](?:Admin|Teacher|Mentor|User)['"]""", fh.read())
     check("the table template names no roles", not named, str(named))
+    for name in ("api/user.py", "main.py"):
+        with open(os.path.join(REPO, name), encoding="utf-8") as fh:
+            named = re.findall(r"""['"](?:Admin|Teacher|Mentor|User)['"]""", fh.read())
+        check(f"{name} names no roles", not named, str(named))
+
+    # which role is the Admin role comes from the data (model/account_types.json), not from code
+    changed = copy.deepcopy(account_types._data)
+    changed["admin_role"] = "Principal"
+    with app.app_context():
+        principal = User(name="zz_principal", uid="zz_principal", password=PASSWORD, role="Principal")
+        admin = User.query.filter_by(_uid="zz_admin").first()
+        by_default = (admin.is_admin(), principal.is_admin())
+        with patch.object(account_types, "_data", changed):
+            when_changed = (admin.is_admin(), principal.is_admin())
+    check("the Admin role follows the data: Admin is the admin by default, Principal once the data says so",
+          by_default == (True, False) and when_changed == (False, True), f"{by_default} {when_changed}")
+    typo = copy.deepcopy(account_types._data)
+    typo["admin_role"] = "Admn"
+    try:
+        account_types._check(typo)
+        refused = False
+    except ValueError:
+        refused = True
+    check("an admin_role that is not one of the staff roles is refused at startup", refused)
 
     # who counts as staff comes from the data (model/account_types.json), not from code
     changed = copy.deepcopy(account_types._data)
