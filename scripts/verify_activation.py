@@ -288,6 +288,111 @@ def main():
               and get("zz_due3")["state"] == "active_verification_required" and get("zz_due4")["state"] == "active_verified",
               f"{r_old.status_code} {r_new.status_code}")
 
+    # ---- a logged-in Teacher or Admin can create test accounts that are not real GitHub accounts ----
+    from model import account_types as _types
+
+    class OnlyRealGitHub:
+        def get(self, uid):
+            return ({}, 404) if uid.startswith("zz_fake") else ({}, 200)
+
+    with app.app_context():
+        db.session.add(User(name="zz_teacher_off", uid="zz_teacher_off", password=PASSWORD, role="Teacher"))  # never activated
+        db.session.commit()
+
+    with patch("api.user.GitHubUser", OnlyRealGitHub):
+        with app.test_client() as c:
+            r = signup(c, "zz_fake_anon", accountType="mentor")
+            check("not logged in: a uid that is not a GitHub account is refused (404) and nothing is created",
+                  r.status_code == 404 and "GitHub" in r.get_json()["message"] and get("zz_fake_anon") is None, r.status_code)
+        with app.test_client() as c:
+            r = signup(c, "zz_real_anon", accountType="mentor")
+            check("not logged in: a real GitHub uid still signs up (200)", r.status_code == 200 and get("zz_real_anon"), r.status_code)
+        with app.test_client() as c:
+            login(c, "zz_student")
+            r = signup(c, "zz_fake_student", accountType="mentor")
+            check("logged in as a student: no bypass (404)", r.status_code == 404 and get("zz_fake_student") is None, r.status_code)
+        with app.test_client() as c:
+            logged_in = c.post("/api/authenticate", json={"uid": "zz_teacher_off", "password": PASSWORD})
+            r = signup(c, "zz_fake_off", accountType="mentor")
+            check("an inactive Teacher, who can log in but is not active, cannot bypass (404)",
+                  logged_in.status_code == 200 and c.get_cookie(app.config["JWT_TOKEN_NAME"]) is not None
+                  and r.status_code == 404 and get("zz_fake_off") is None, f"login {logged_in.status_code}, signup {r.status_code}")
+        with app.test_client() as c:
+            c.set_cookie(app.config["JWT_TOKEN_NAME"], "not-a-real-token")
+            r = signup(c, "zz_fake_badjwt", accountType="mentor")
+            check("a garbage login cookie does not bypass (404)", r.status_code == 404 and get("zz_fake_badjwt") is None, r.status_code)
+
+        for staff in ("zz_teacher", "zz_admin"):
+            with app.test_client() as c:
+                login(c, staff)
+                r = signup(c, f"zz_fake_by_{staff[3:]}", accountType="mentor")
+                u = get(f"zz_fake_by_{staff[3:]}")
+                check(f"logged in as {staff[3:].title()}: a uid that is not a GitHub account can be created (200, an inactive Mentor)",
+                      r.status_code == 200 and u and u["role"] == "Mentor" and u["active"] is False, f"{r.status_code} {u}")
+        with app.test_client() as c:
+            login(c, "zz_teacher")
+            r = signup(c, "zz_fake_student2", accountType="student")
+            u = get("zz_fake_student2")
+            check("a staff-made student test account is created too, inactive until staff activate it (no Google token)",
+                  r.status_code == 200 and u and u["role"] == "User" and u["active"] is False, f"{r.status_code} {u}")
+            with app.app_context():
+                before = User.query.filter_by(_uid="zz_fake_student2").count()
+            other_password = "Aa1!" + secrets.token_urlsafe(8)
+            signup(c, "zz_fake_student2", accountType="mentor", password=other_password, name="Someone Else")
+            with app.app_context():
+                after = User.query.filter_by(_uid="zz_fake_student2").count()
+                kept = User.query.filter_by(_uid="zz_fake_student2").first()
+                untouched = kept.is_password(PASSWORD) and not kept.is_password(other_password) and kept.name == "Name zz_fake_student2"
+            check("a repeated uid creates no second account and changes nothing in the first (role, password, name)",
+                  before == 1 and after == 1 and get("zz_fake_student2")["role"] == "User" and untouched, f"{before} {after} {untouched}")
+            r = signup(c, "z", accountType="student")
+            check("the bypass does not skip the uid length check (400)", r.status_code == 400, r.status_code)
+            r = signup(c, "zz_fake_notstaff", accountType="teacher")
+            u = get("zz_fake_notstaff")
+            check("staff still cannot make a Teacher or Admin this way: an unknown type is an ordinary student",
+                  r.status_code == 200 and u and u["role"] == "User", f"{r.status_code} {u}")
+
+        # the audit log: one line per account actually created by staff, and no forged lines
+        import logging
+
+        class Collect(logging.Handler):
+            def __init__(self):
+                super().__init__(logging.INFO)
+                self.lines = []
+            def emit(self, record):
+                if "AUDIT" in record.getMessage():
+                    self.lines.append(record.getMessage())
+        collector = Collect()
+        app.logger.addHandler(collector)
+        old_level = app.logger.level
+        app.logger.setLevel(logging.INFO)
+        try:
+            with app.test_client() as c:
+                login(c, "zz_teacher")
+                signup(c, "zz_fake_logged", accountType="mentor")
+                one = list(collector.lines)
+                signup(c, "zz_fake_logged", accountType="mentor")     # a repeat: nothing new is created
+                signup(c, "zz_fake_x", accountType="mentor", password="short")  # refused: too short
+                after_failures = list(collector.lines)
+                signup(c, "zz_fake_nl\nAUDIT signup uid=admin created by staff uid=other", accountType="mentor")
+                forged = list(collector.lines)
+            check("a staff-created account is logged once, with who made it",
+                  len(one) == 1 and "zz_fake_logged" in one[0] and "zz_teacher" in one[0], str(one))
+            check("a repeated uid and a refused signup are not logged as created", after_failures == one, str(after_failures))
+            check("a uid with a newline cannot forge a second log line", all("\n" not in l for l in forged) and len(forged) <= len(one) + 1, str(forged))
+        finally:
+            app.logger.removeHandler(collector)
+            app.logger.setLevel(old_level)
+
+        changed = copy.deepcopy(_types._data)
+        changed["staff_roles"] = ["Admin"]
+        with patch.object(_types, "_data", changed):
+            with app.test_client() as c:
+                login(c, "zz_teacher")
+                r = signup(c, "zz_fake_data", accountType="mentor")
+                check("who may bypass comes from the data: with Teacher dropped from staff_roles a Teacher no longer can (404)",
+                      r.status_code == 404 and get("zz_fake_data") is None, r.status_code)
+
     # update() cannot self-activate
     with app.app_context():
         u = User.query.filter_by(_uid="zz_noclient").first()
