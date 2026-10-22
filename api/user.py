@@ -87,6 +87,15 @@ def _consume_reset_token(uid, token):
         return True
 
 
+def _staff_caller():
+    """The logged-in, active Teacher or Admin making this request, or None. It asks the same
+    token_required check every staff endpoint uses, so an inactive account, a stale or garbage
+    login, and a role that is not in staff_roles all come back as None."""
+    probe = token_required(account_types.staff_roles())(lambda: g.current_user)
+    caller = probe()
+    return caller if isinstance(caller, User) else None
+
+
 def _without_password(user_data):
     """Strip the password hash before a user dict goes out over a general-purpose
     API response. The admin-only backup/export endpoints in data_export_import_api.py
@@ -177,10 +186,13 @@ class UserAPI:
             if uid is None or len(uid) < 2:
                 return {'message': f'User ID is missing, or is less than 2 characters'}, 400
           
-            # check if uid is a GitHub account
-            _, status = GitHubUser().get(uid)
-            if status != 200:
-                return {'message': f'User ID {uid} not a valid GitHub account' }, 404
+            # check if uid is a GitHub account. A logged-in Teacher or Admin may create test
+            # accounts that are not.
+            staff = _staff_caller()
+            if staff is None:
+                _, status = GitHubUser().get(uid)
+                if status != 200:
+                    return {'message': f'User ID {uid} not a valid GitHub account' }, 404
             
             ''' User object creation '''
             # The account type (see model/account_types.json) sets the role. A type with Google
@@ -242,6 +254,9 @@ class UserAPI:
 
                 if verified_email:
                     user.activate()
+                if staff is not None:
+                    # %r quotes the uid, so a newline in it cannot forge a second log line
+                    current_app.logger.info("AUDIT signup uid=%r created by staff uid=%r without a GitHub check", user.uid, staff.uid)
 
                 #print(f"Successfully created user: {user.uid}")
                 # return response, the created user details as a JSON object
