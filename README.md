@@ -78,7 +78,7 @@ pip install -r requirements.txt
   # Default user for testing 
   USER_NAME='Grace Hopper'
   USER_UID='hop'
-  USER_PASSWORD='123Hop!'
+  USER_PASSWORD='123Grace!'
   USER_PFP='hop.png'
   # Convience user defaults
   MY_NAME='John Mortensen'
