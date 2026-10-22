@@ -501,6 +501,7 @@ class UserAPI:
                         # Return JSON response with cookie
                         is_production = os.environ.get('IS_PRODUCTION', 'false').lower() == 'true'
                         
+                        state = user.verification_state
                         # Create JSON response
                         response_data = {
                             "message": f"Authentication for {user._uid} successful",
@@ -508,7 +509,11 @@ class UserAPI:
                                 "uid": user._uid,
                                 "name": user.name,
                                 "role": user.role,
-                                "class": user._class if getattr(user, '_class', None) is not None else []
+                                "class": user._class if getattr(user, '_class', None) is not None else [],
+                                "active": user.active,
+                                "verification_state": state,
+                                "verification_required": state == "active_verification_required",
+                                "verified_by_google": bool(account_types.google_domains(user.role))
                             }
                         }
                         resp = jsonify(response_data)
@@ -909,6 +914,24 @@ class UserAPI:
             db.session.commit()
             return jsonify(_without_password(target.read()))
 
+    class _Reverify(Resource):
+        """A student whose verification has lapsed verifies again with school Google sign-in:
+        POST {"idToken": ...}. Every other account is verified by a Teacher or Admin."""
+        @token_required()
+        def post(self):
+            user = g.current_user
+            domains = account_types.google_domains(user.role)
+            if not domains:
+                return {'message': 'A Teacher or Admin verifies this account'}, 403
+            if user.verification_state != "active_verification_required":
+                return {'message': 'No verification is due'}, 409
+            body = request.get_json(silent=True)
+            if not isinstance(body, dict):
+                return {'message': 'The body must be a JSON object such as {"idToken": "..."}'}, 400
+            if not verified_google_email(body.get('idToken'), domains):
+                return {'message': 'Google could not verify a school account from this sign-in'}, 403
+            return jsonify(_without_password(user.activate().read()))
+
     class _AdminCreate(Resource):
         """Teacher/Admin creates an account of a staff-created type (see
         model/account_types.json). The account starts inactive and follows the same
@@ -943,6 +966,7 @@ class UserAPI:
     api.add_resource(_VerifyAccount, '/user/<string:uid>/verify')
     api.add_resource(_DeactivateAccount, '/user/<string:uid>/deactivate')
     api.add_resource(_ChangeRole, '/user/<string:uid>/role')
+    api.add_resource(_Reverify, '/user/reverify')
     api.add_resource(_AdminCreate, '/user/admin-create')
     
     class _Class(Resource):

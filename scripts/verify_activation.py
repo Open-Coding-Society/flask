@@ -214,6 +214,80 @@ def main():
                 check("the re-verification interval comes from the data",
                       probe.verification_state == "active_verification_required")
 
+    # ---- a student whose verification has lapsed verifies again with school Google sign-in -----
+    with app.app_context():
+        for uid, role, days in (("zz_due", "User", 400), ("zz_due2", "User", 400), ("zz_due3", "User", 400),
+                                ("zz_due4", "User", 400), ("zz_fresh", "User", 10), ("zz_mentor_due", "Mentor", 400)):
+            u = User(name=uid, uid=uid, password=PASSWORD, role=role)
+            db.session.add(u)
+            db.session.commit()
+            u.activate()
+            u.last_verified = datetime.utcnow() - timedelta(days=days)
+            db.session.commit()
+        db.session.add(User(name="zz_off", uid="zz_off", password=PASSWORD))  # a student never activated
+        db.session.commit()
+
+    def login_user_body(uid):
+        with app.test_client() as c:
+            return c.post("/api/authenticate", json={"uid": uid, "password": PASSWORD}).get_json()["user"]
+
+    def reverify(uid, token="good-token", **extra):
+        with app.test_client() as c:
+            login(c, uid)
+            return c.post("/api/user/reverify", json={"idToken": token, **extra})
+
+    with patch("model.google_token.requests.get", fake_tokeninfo):
+        due, fresh, mentor, off = (login_user_body(u) for u in ("zz_due", "zz_fresh", "zz_mentor_due", "zz_off"))
+        check("login tells a lapsed student that verification is required, and that Google does it",
+              due["active"] is True and due["verification_state"] == "active_verification_required"
+              and due["verification_required"] is True and due["verified_by_google"] is True, str(due))
+        check("login tells a verified student that nothing is required",
+              fresh["verification_state"] == "active_verified" and fresh["verification_required"] is False, str(fresh))
+        check("login tells a lapsed Mentor that verification is required but staff do it, not Google",
+              mentor["verification_required"] is True and mentor["verified_by_google"] is False, str(mentor))
+        check("login shows an inactive account as inactive, not as verification required",
+              off["active"] is False and off["verification_state"] == "inactive" and off["verification_required"] is False, str(off))
+
+        r = reverify("zz_due")
+        u = get("zz_due")
+        check("a lapsed student with a valid school token is verified again (200, active_verified, stamped now)",
+              r.status_code == 200 and u["state"] == "active_verified"
+              and (datetime.utcnow() - u["last_verified"]).total_seconds() < 60, f"{r.status_code} {u}")
+        for bad in ("wrong-aud", "wrong-iss", "unverified", "not-student", "other-domain", "no-such-token", ""):
+            r = reverify("zz_due2", bad)
+            check(f"token {bad!r} does not verify (403) and the student stays lapsed",
+                  r.status_code == 403 and get("zz_due2")["state"] == "active_verification_required", f"{r.status_code}")
+        with app.test_client() as c:
+            login(c, "zz_due2")
+            r = c.post("/api/user/reverify", json={})
+            check("no token at all is refused (403)", r.status_code == 403 and get("zz_due2")["state"] == "active_verification_required")
+            for odd in ([], "x", 5):
+                r = c.post("/api/user/reverify", json=odd)
+                check(f"a body that is not a JSON object ({odd!r}) is a 400", r.status_code == 400, r.status_code)
+        before = get("zz_fresh")["last_verified"]
+        r = reverify("zz_fresh")
+        check("a student whose verification is current is told none is due (409) and nothing changes",
+              r.status_code == 409 and get("zz_fresh")["last_verified"] == before, r.status_code)
+        r = reverify("zz_mentor_due")
+        check("a lapsed Mentor cannot verify with Google (403): staff verify Mentors",
+              r.status_code == 403 and get("zz_mentor_due")["state"] == "active_verification_required", r.status_code)
+        r = reverify("zz_off")
+        check("an inactive student cannot activate themselves with a valid token (403)",
+              r.status_code == 403 and get("zz_off")["active"] is False, r.status_code)
+        with app.test_client() as c:
+            r = c.post("/api/user/reverify", json={"idToken": GOOD})
+            check("without logging in it is refused (401)", r.status_code == 401, r.status_code)
+
+        changed = copy.deepcopy(account_types._data)
+        changed["account_types"]["student"]["google_verified_domains"] = ["school.example"]
+        with patch.object(account_types, "_data", changed):
+            r_old = reverify("zz_due3", GOOD)
+            r_new = reverify("zz_due4", "other-domain")
+        check("the school domain comes from the data: the old domain is refused and the new one accepted",
+              r_old.status_code == 403 and r_new.status_code == 200
+              and get("zz_due3")["state"] == "active_verification_required" and get("zz_due4")["state"] == "active_verified",
+              f"{r_old.status_code} {r_new.status_code}")
+
     # update() cannot self-activate
     with app.app_context():
         u = User.query.filter_by(_uid="zz_noclient").first()
