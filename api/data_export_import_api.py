@@ -455,6 +455,9 @@ class ImportAllData(Resource):
                 if user_data.get('email'):
                     user.email = user_data.get('email')
 
+                # Keep the account's active/verified state; the constructor leaves it inactive
+                user.restore_state(user_data)
+
                 # Add sections if provided
                 if 'sections' in user_data and user_data['sections']:
                     for section_data in user_data['sections']:

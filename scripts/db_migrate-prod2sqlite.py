@@ -396,6 +396,8 @@ def load_users(users_data):
             )
             if user_data.get('email'):
                 user.email = user_data['email']
+            # Keep the account's active/verified state; the constructor leaves it inactive
+            user.restore_state(user_data)
 
             for section_data in user_data.get('sections', []):
                 abbrev = section_data.get('abbreviation')
