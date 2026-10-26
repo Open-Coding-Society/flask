@@ -440,6 +440,17 @@ def main():
     check("the numbers and the exempt roles come from the data: default 7 days, Mentor exempt, Teacher no longer exempt",
           seven and mentor_exempt and teacher_lapses, f"{seven} {mentor_exempt} {teacher_lapses}")
 
+    # a test account is tagged in the table, and no other row is
+    with app.app_context():
+        tagged = User(name="zz_tagged", uid="zz_tagged", password=PASSWORD)
+        tagged.is_test = True
+        db.session.add(tagged)
+        db.session.commit()
+        tagged.activate()
+    html_tag, _ = table("zz_admin")
+    check("the table shows a Test badge on a test account and on no other row",
+          "Test</span>" in row(html_tag, "zz_tagged") and all("Test</span>" not in row(html_tag, u) for u in ("zz_student", "zz_teacher", "zz_admin")))
+
     # the table asks the user who they are (is_admin, is_teacher); it does not name roles itself
     with open(os.path.join(REPO, "templates", "u2table.html"), encoding="utf-8") as fh:
         named = re.findall(r"""['"](?:Admin|Teacher|Mentor|User)['"]""", fh.read())

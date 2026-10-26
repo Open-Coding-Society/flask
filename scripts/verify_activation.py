@@ -89,7 +89,8 @@ def main():
         with app.app_context():
             u = User.query.filter_by(_uid=uid).first()
             return None if u is None else dict(role=u.role, active=u.active, state=u.verification_state,
-                                               last_verified=u.last_verified, email=u.email)
+                                               last_verified=u.last_verified, email=u.email,
+                                               is_test=getattr(u, "is_test", None))
 
     def login(c, uid):
         r = c.post("/api/authenticate", json={"uid": uid, "password": PASSWORD})
@@ -288,7 +289,7 @@ def main():
               and get("zz_due3")["state"] == "active_verification_required" and get("zz_due4")["state"] == "active_verified",
               f"{r_old.status_code} {r_new.status_code}")
 
-    # ---- a logged-in Teacher or Admin can create test accounts that are not real GitHub accounts ----
+    # ---- a test account: a student an Admin tags as a test, with no GitHub or Google check ------
     from model import account_types as _types
 
     class OnlyRealGitHub:
@@ -296,63 +297,108 @@ def main():
             return ({}, 404) if uid.startswith("zz_fake") else ({}, 200)
 
     with app.app_context():
-        db.session.add(User(name="zz_teacher_off", uid="zz_teacher_off", password=PASSWORD, role="Teacher"))  # never activated
+        db.session.add(User(name="zz_admin_off", uid="zz_admin_off", password=PASSWORD, role="Admin"))  # never activated
         db.session.commit()
 
-    with patch("api.user.GitHubUser", OnlyRealGitHub):
+    def count(uid):
+        with app.app_context():
+            return User.query.filter_by(_uid=uid).count()
+
+    with patch("api.user.GitHubUser", OnlyRealGitHub), patch("model.google_token.requests.get", fake_tokeninfo):
         with app.test_client() as c:
             r = signup(c, "zz_fake_anon", accountType="mentor")
             check("not logged in: a uid that is not a GitHub account is refused (404) and nothing is created",
-                  r.status_code == 404 and "GitHub" in r.get_json()["message"] and get("zz_fake_anon") is None, r.status_code)
-        with app.test_client() as c:
+                  r.status_code == 404 and "GitHub" in r.get_json()["message"] and count("zz_fake_anon") == 0, r.status_code)
             r = signup(c, "zz_real_anon", accountType="mentor")
-            check("not logged in: a real GitHub uid still signs up (200)", r.status_code == 200 and get("zz_real_anon"), r.status_code)
+            check("not logged in: a real GitHub uid still signs up (200), and is not a test account",
+                  r.status_code == 200 and get("zz_real_anon") and get("zz_real_anon")["is_test"] is False, r.status_code)
+            r = signup(c, "zz_real_anon_test", accountType="student", isTest=True)
+            check("not logged in: asking for a test account is refused (403), even for a real GitHub uid, and nothing is created",
+                  r.status_code == 403 and count("zz_real_anon_test") == 0, r.status_code)
+            r = signup(c, "zz_fake_anon2", accountType="student", isTest="true")
+            check("isTest must be the JSON value true: the string 'true' is an ordinary signup, so the GitHub check applies (404)",
+                  r.status_code == 404 and count("zz_fake_anon2") == 0, r.status_code)
         with app.test_client() as c:
             login(c, "zz_student")
-            r = signup(c, "zz_fake_student", accountType="mentor")
-            check("logged in as a student: no bypass (404)", r.status_code == 404 and get("zz_fake_student") is None, r.status_code)
-        with app.test_client() as c:
-            logged_in = c.post("/api/authenticate", json={"uid": "zz_teacher_off", "password": PASSWORD})
-            r = signup(c, "zz_fake_off", accountType="mentor")
-            check("an inactive Teacher, who can log in but is not active, cannot bypass (404)",
-                  logged_in.status_code == 200 and c.get_cookie(app.config["JWT_TOKEN_NAME"]) is not None
-                  and r.status_code == 404 and get("zz_fake_off") is None, f"login {logged_in.status_code}, signup {r.status_code}")
-        with app.test_client() as c:
-            c.set_cookie(app.config["JWT_TOKEN_NAME"], "not-a-real-token")
-            r = signup(c, "zz_fake_badjwt", accountType="mentor")
-            check("a garbage login cookie does not bypass (404)", r.status_code == 404 and get("zz_fake_badjwt") is None, r.status_code)
-
-        for staff in ("zz_teacher", "zz_admin"):
-            with app.test_client() as c:
-                login(c, staff)
-                r = signup(c, f"zz_fake_by_{staff[3:]}", accountType="mentor")
-                u = get(f"zz_fake_by_{staff[3:]}")
-                check(f"logged in as {staff[3:].title()}: a uid that is not a GitHub account can be created (200, an inactive Mentor)",
-                      r.status_code == 200 and u and u["role"] == "Mentor" and u["active"] is False, f"{r.status_code} {u}")
+            r = signup(c, "zz_fake_student", accountType="student", isTest=True)
+            check("logged in as a student: refused (403)", r.status_code == 403 and count("zz_fake_student") == 0, r.status_code)
         with app.test_client() as c:
             login(c, "zz_teacher")
-            r = signup(c, "zz_fake_student2", accountType="student")
-            u = get("zz_fake_student2")
-            check("a staff-made student test account is created too, inactive until staff activate it (no Google token)",
-                  r.status_code == 200 and u and u["role"] == "User" and u["active"] is False, f"{r.status_code} {u}")
-            with app.app_context():
-                before = User.query.filter_by(_uid="zz_fake_student2").count()
-            other_password = "Aa1!" + secrets.token_urlsafe(8)
-            signup(c, "zz_fake_student2", accountType="mentor", password=other_password, name="Someone Else")
-            with app.app_context():
-                after = User.query.filter_by(_uid="zz_fake_student2").count()
-                kept = User.query.filter_by(_uid="zz_fake_student2").first()
-                untouched = kept.is_password(PASSWORD) and not kept.is_password(other_password) and kept.name == "Name zz_fake_student2"
-            check("a repeated uid creates no second account and changes nothing in the first (role, password, name)",
-                  before == 1 and after == 1 and get("zz_fake_student2")["role"] == "User" and untouched, f"{before} {after} {untouched}")
-            r = signup(c, "z", accountType="student")
-            check("the bypass does not skip the uid length check (400)", r.status_code == 400, r.status_code)
-            r = signup(c, "zz_fake_notstaff", accountType="teacher")
-            u = get("zz_fake_notstaff")
-            check("staff still cannot make a Teacher or Admin this way: an unknown type is an ordinary student",
-                  r.status_code == 200 and u and u["role"] == "User", f"{r.status_code} {u}")
+            r = signup(c, "zz_fake_teacher", accountType="student", isTest=True)
+            check("logged in as a Teacher: refused (403), a test account is Admin only",
+                  r.status_code == 403 and count("zz_fake_teacher") == 0, r.status_code)
+            r = signup(c, "zz_fake_student_by_teacher", accountType="student")
+            check("a Teacher signing up an ordinary student with a uid that is not a GitHub account is refused (404)",
+                  r.status_code == 404 and count("zz_fake_student_by_teacher") == 0, r.status_code)
+        with app.test_client() as c:
+            logged_in = c.post("/api/authenticate", json={"uid": "zz_admin_off", "password": PASSWORD})
+            r = signup(c, "zz_fake_adminoff", accountType="student", isTest=True)
+            check("an inactive Admin, who can log in but is not active, is refused (403)",
+                  logged_in.status_code == 200 and c.get_cookie(app.config["JWT_TOKEN_NAME"]) is not None
+                  and r.status_code == 403 and count("zz_fake_adminoff") == 0, f"login {logged_in.status_code}, signup {r.status_code}")
+        with app.test_client() as c:
+            c.set_cookie(app.config["JWT_TOKEN_NAME"], "not-a-real-token")
+            r = signup(c, "zz_fake_badjwt", accountType="student", isTest=True)
+            check("a garbage login cookie is refused (403)", r.status_code == 403 and count("zz_fake_badjwt") == 0, r.status_code)
 
-        # the audit log: one line per account actually created by staff, and no forged lines
+        with app.test_client() as c:
+            login(c, "zz_admin")
+            r = signup(c, "zz_fake_test1", accountType="student", isTest=True)
+            u = get("zz_fake_test1")
+            check("logged in as an Admin: a test account with a uid that is not a GitHub account is created (200), a tagged, inactive student",
+                  r.status_code == 200 and u and u["role"] == "User" and u["is_test"] is True and u["active"] is False, f"{r.status_code} {u}")
+            r = signup(c, "zz_real_test2", accountType="student", isTest=True)
+            check("an Admin can make a test account with a real GitHub uid too (200)",
+                  r.status_code == 200 and get("zz_real_test2") and get("zz_real_test2")["is_test"] is True, r.status_code)
+            r = signup(c, "zz_fake_test3", accountType="student", isTest=True, idToken=GOOD)
+            u = get("zz_fake_test3")
+            check("a test account is never activated by a Google token: it starts inactive even with a valid one",
+                  r.status_code == 200 and u and u["active"] is False and u["is_test"] is True, f"{r.status_code} {u}")
+            r = signup(c, "zz_fake_test4", accountType="mentor", isTest=True)
+            u = get("zz_fake_test4")
+            check("a test account is always a student, whatever type was asked for",
+                  r.status_code == 200 and u and u["role"] == "User" and u["is_test"] is True, f"{r.status_code} {u}")
+            for kind in ("student", "mentor"):
+                r = signup(c, f"zz_fake_{kind}_by_admin", accountType=kind)
+                check(f"an Admin signing up an ordinary {kind} with a uid that is not a GitHub account is refused (404): no hidden bypass",
+                      r.status_code == 404 and count(f"zz_fake_{kind}_by_admin") == 0, r.status_code)
+            other_password = "Aa1!" + secrets.token_urlsafe(8)
+            r_dup = signup(c, "zz_fake_test1", accountType="student", isTest=True, password=other_password, name="Someone Else")
+            check("a repeated uid for a test account says it already exists (409), with no other account's details",
+                  r_dup.status_code == 409 and "already exists" in r_dup.get_json()["message"] and "email" not in r_dup.get_json(), f"{r_dup.status_code} {r_dup.get_data(as_text=True)[:80]}")
+            with app.app_context():
+                kept = User.query.filter_by(_uid="zz_fake_test1").first()
+                untouched = kept.is_password(PASSWORD) and not kept.is_password(other_password) and kept.name == "Name zz_fake_test1"
+            check("a repeated uid creates no second account and changes nothing in the first (password, name)",
+                  count("zz_fake_test1") == 1 and untouched, f"{count('zz_fake_test1')} {untouched}")
+            r_real = signup(c, "zz_real_anon", accountType="student", isTest=True)
+            check("asking for a test account with the uid of an existing real account is refused (409) and does not tag it",
+                  r_real.status_code == 409 and get("zz_real_anon")["is_test"] is False, f"{r_real.status_code} {get('zz_real_anon')}")
+            r = signup(c, "z", accountType="student", isTest=True)
+            check("the uid length check still applies to a test account (400)", r.status_code == 400, r.status_code)
+            r = signup(c, "zz_fake_test_weak", accountType="student", isTest=True, password="weak")
+            check("the password rule still applies to a test account (400)", r.status_code == 400 and count("zz_fake_test_weak") == 0, r.status_code)
+            listed = {x["uid"]: x for x in c.get("/api/user").get_json()}
+            check("the user list shows the tag", listed.get("zz_fake_test1", {}).get("is_test") is True
+                  and listed.get("zz_student", {}).get("is_test") is False, str({k: v.get("is_test") for k, v in listed.items() if k in ("zz_fake_test1", "zz_student")}))
+        with app.test_client() as c:
+            login(c, "zz_student")
+            c.put("/api/user", json={"is_test": True})
+            check("a user cannot tag themselves by updating their profile", get("zz_student")["is_test"] is False)
+        with app.test_client() as c:
+            login(c, "zz_admin")
+            c.put("/api/user", json={"uid": "zz_fake_test1", "is_test": False})
+            check("and the tag cannot be removed through an update either", get("zz_fake_test1")["is_test"] is True)
+
+        changed = copy.deepcopy(_types._data)
+        changed["admin_role"] = "Teacher"
+        with patch.object(_types, "_data", changed):
+            with app.test_client() as c:
+                login(c, "zz_teacher")
+                r = signup(c, "zz_fake_data1", accountType="student", isTest=True)
+                check("who may make a test account comes from the data: with the Admin role renamed to Teacher, a Teacher can (200) ",
+                      r.status_code == 200 and get("zz_fake_data1") and get("zz_fake_data1")["is_test"] is True, r.status_code)
+
         import logging
 
         class Collect(logging.Handler):
@@ -368,30 +414,21 @@ def main():
         app.logger.setLevel(logging.INFO)
         try:
             with app.test_client() as c:
-                login(c, "zz_teacher")
-                signup(c, "zz_fake_logged", accountType="mentor")
+                login(c, "zz_admin")
+                signup(c, "zz_fake_logged", accountType="student", isTest=True)
                 one = list(collector.lines)
-                signup(c, "zz_fake_logged", accountType="mentor")     # a repeat: nothing new is created
-                signup(c, "zz_fake_x", accountType="mentor", password="short")  # refused: too short
+                signup(c, "zz_fake_logged", accountType="student", isTest=True)
+                signup(c, "zz_fake_x", accountType="student", isTest=True, password="short")
                 after_failures = list(collector.lines)
-                signup(c, "zz_fake_nl\nAUDIT signup uid=admin created by staff uid=other", accountType="mentor")
+                signup(c, "zz_fake_nl\nAUDIT signup uid=admin created by admin uid=other", accountType="student", isTest=True)
                 forged = list(collector.lines)
-            check("a staff-created account is logged once, with who made it",
-                  len(one) == 1 and "zz_fake_logged" in one[0] and "zz_teacher" in one[0], str(one))
+            check("a test account is logged once, with who made it",
+                  len(one) == 1 and "zz_fake_logged" in one[0] and "zz_admin" in one[0], str(one))
             check("a repeated uid and a refused signup are not logged as created", after_failures == one, str(after_failures))
             check("a uid with a newline cannot forge a second log line", all("\n" not in l for l in forged) and len(forged) <= len(one) + 1, str(forged))
         finally:
             app.logger.removeHandler(collector)
             app.logger.setLevel(old_level)
-
-        changed = copy.deepcopy(_types._data)
-        changed["staff_roles"] = ["Admin"]
-        with patch.object(_types, "_data", changed):
-            with app.test_client() as c:
-                login(c, "zz_teacher")
-                r = signup(c, "zz_fake_data", accountType="mentor")
-                check("who may bypass comes from the data: with Teacher dropped from staff_roles a Teacher no longer can (404)",
-                      r.status_code == 404 and get("zz_fake_data") is None, r.status_code)
 
     # update() cannot self-activate
     with app.app_context():
