@@ -345,6 +345,22 @@ safe, and it is the only order in which the pull can verify itself.
    transfer. Keep your local copy until it reports a clean reconciliation -- until then
    your local database is the only complete copy of that data.
 
+### When the change only adds tables: `db_upgrade.py`
+
+Most schema changes only add a model. For those, skip the wipe-and-reload above:
+`scripts/db_upgrade.py` creates the missing tables in place and touches nothing else.
+
+```bash
+python scripts/db_upgrade.py --check     # what would change; exit 2 = tables to create
+python scripts/db_upgrade.py             # backup, create_all(), re-count every table
+```
+
+It refuses (and changes nothing) when an existing table is missing a column, because
+`create_all()` cannot add one -- use an `ALTER TABLE` or the full workflow above for that.
+Tables and columns the models no longer use are listed and left in place. On production
+the web container has no `mysqldump`, so take the dump on the host first and pass it in
+with `--backup-file`; the exact commands are in the migration runbook.
+
 ### Tables covered by the migration
 
 `sections`, `users`, `topics`, `microblogs`, `posts`, `classrooms`, `feedback`, `study`,
