@@ -3,6 +3,7 @@ from flask_login import current_user
 from functools import wraps
 import jwt
 from model.user import User
+from model import account_types
 
 def auth_required(roles=None):
     '''
@@ -111,6 +112,22 @@ def auth_required(roles=None):
                     "data": None,
                     "error": "Forbidden"
                 }, 403
+
+            # An account type can last only a few hours and be limited to a short list of requests
+            # (see model/account_types.json). The CORS preflight (OPTIONS) carries no login.
+            if request.method != 'OPTIONS':
+                if user.expired():
+                    return {
+                        "message": "This account has expired.",
+                        "data": None,
+                        "error": "Forbidden"
+                    }, 403
+                if not account_types.request_allowed(user.role, request.method, request.path):
+                    return {
+                        "message": "This type of account is not allowed to do that.",
+                        "data": None,
+                        "error": "Forbidden"
+                    }, 403
 
             # Now check role requirements if specified
             if roles:

@@ -39,6 +39,7 @@ from api.presence_api import presence_api
 
 # database Initialization functions
 from model.user import User, initUsers
+from model import account_types
 from model.user import Section;
 from model.github import GitHubUser
 from model.feedback import Feedback
@@ -128,7 +129,19 @@ def load_user(user_id):
     user = User.query.get(raw_id)
     if user is None or str(user.token_version) != token_version:
         return None
+    if user.expired():
+        return None  # an account with a lifetime (a guest) has no session once it has passed
     return user
+
+@app.before_request
+def limit_session_accounts():
+    """An account type limited to a list of requests (a guest) is held to it on Flask's own
+    pages and login session too, not only through the API's token check."""
+    if request.method == 'OPTIONS' or not current_user.is_authenticated:
+        return None
+    if not account_types.request_allowed(current_user.role, request.method, request.path):
+        return jsonify({'message': 'This type of account is not allowed to do that.'}), 403
+    return None
 
 @app.context_processor
 def inject_user():
@@ -148,6 +161,8 @@ def login():
         user = User.query.filter_by(_uid=request.form['username']).first()
         if user and user.is_password(request.form['password']) and not user.active:
             error = 'Account pending verification.'
+        elif user and user.is_password(request.form['password']) and user.expired():
+            error = 'This account has expired.'
         elif user and user.is_password(request.form['password']):
             login_user(user)
             if not is_safe_url(next_page):

@@ -361,6 +361,13 @@ class User(db.Model, UserMixin):
             return "active_verification_required"
         return "active_verified"
 
+    def expired(self):
+        """True when this account's type has a lifetime (lifetime_hours in account_types.json) and
+        it has passed. The lifetime counts from last_verified, which activating the account sets."""
+        hours = account_types.lifetime_hours(self.role)
+        return hours is not None and (self.last_verified is None
+                                      or datetime.utcnow() - self.last_verified > timedelta(hours=hours))
+
     def activate(self, days=None):
         """Verify the account: mark it active and record when. days is how long the verification
         should last, up to the full interval; without it, the full interval."""

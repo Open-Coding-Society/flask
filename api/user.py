@@ -186,19 +186,23 @@ class UserAPI:
             if uid is None or len(uid) < 2:
                 return {'message': f'User ID is missing, or is less than 2 characters'}, 400
           
-            # check if uid is a GitHub account. A logged-in Teacher or Admin may create test
-            # accounts that are not.
+            # The account type (see model/account_types.json) sets the role. A type with Google
+            # domains is activated only when Google verifies an email in them for the submitted
+            # token; a type that is active on sign-up (a guest) is activated at once; any other
+            # type stays inactive until a Teacher/Admin verifies it.
+            account_type = account_types.get(body.get('accountType'))
+            if body.get('password') is None and not account_types.needs_github_check(account_type):
+                return {'message': 'A password is required'}, 400
+
+            # check if uid is a GitHub account, unless the account type does not need one. A
+            # logged-in Teacher or Admin may also create accounts that are not.
             staff = _staff_caller()
-            if staff is None:
+            if staff is None and account_types.needs_github_check(account_type):
                 _, status = GitHubUser().get(uid)
                 if status != 200:
                     return {'message': f'User ID {uid} not a valid GitHub account' }, 404
             
             ''' User object creation '''
-            # The account type (see model/account_types.json) sets the role. A type with Google
-            # domains is activated only when Google verifies an email in them for the submitted
-            # token; any other type stays inactive until a Teacher/Admin verifies it.
-            account_type = account_types.get(body.get('accountType'))
             role = account_type['role']
             domains = account_type['google_verified_domains']
             verified_email = verified_google_email(body.get('idToken'), domains) if domains else None
@@ -239,6 +243,11 @@ class UserAPI:
 
             #2: Save the User object to the database using custom create method
             try:
+                # An account whose lifetime has passed (a guest) no longer holds its uid. This is
+                # after the request is validated, so a refused sign-up removes nothing.
+                taken = User.query.filter_by(_uid=uid).first()
+                if taken is not None and taken.expired():
+                    taken.delete()
                 user = user_obj.create(cleaned_body) # pass the cleaned body elements to be saved in the database
                 #print(f"Create method returned: {user}")
                 #print(f"User type: {type(user)}")
@@ -247,14 +256,17 @@ class UserAPI:
                     # Check if user was actually created in database despite create() returning None
                     db_user = User.query.filter_by(_uid=uid).first()
                     if db_user:
+                        if not account_types.needs_github_check(account_type):
+                            # an open sign-up (a guest): say it is taken, and show nothing about the account
+                            return {'message': f'User ID {uid} already exists'}, 409
                         #print(f"User exists in DB but create returned None: {db_user.uid}")
                         return jsonify(_without_password(db_user.read()))  # Return the user anyway
                     else:
                         return {'message': f'Processed {name}, either a format error or User ID {uid} is duplicate'}, 400
 
-                if verified_email:
+                if verified_email or account_types.active_on_signup(account_type):
                     user.activate()
-                if staff is not None:
+                if staff is not None and account_types.needs_github_check(account_type):
                     # %r quotes the uid, so a newline in it cannot forge a second log line
                     current_app.logger.info("AUDIT signup uid=%r created by staff uid=%r without a GitHub check", user.uid, staff.uid)
 
@@ -496,6 +508,9 @@ class UserAPI:
                 if user is None or not user.is_password(password):
                     
                     return {'message': f"Invalid user id or password"}, 401
+
+                if user.expired():
+                    return {'message': 'This account has expired'}, 403
                             
                 # Check if user is found
                 if user:
@@ -528,7 +543,8 @@ class UserAPI:
                                 "active": user.active,
                                 "verification_state": state,
                                 "verification_required": state == "active_verification_required",
-                                "verified_by_google": bool(account_types.google_domains(user.role))
+                                "verified_by_google": bool(account_types.google_domains(user.role)),
+                                "limited": account_types.allowed_requests(user.role) is not None
                             }
                         }
                         resp = jsonify(response_data)
@@ -889,6 +905,9 @@ class UserAPI:
             target = User.query.filter_by(_uid=uid).first()
             if target is None:
                 return {'message': f'User {uid} not found'}, 404
+            if account_types.allowed_requests(target.role) is not None:
+                # verifying would restart, or end, the few hours a limited account (a guest) lasts
+                return {'message': 'This type of account cannot be verified'}, 400
             days = account_types.fixed_verification_days(target.role)
             if days is None:
                 body = request.get_json(silent=True)

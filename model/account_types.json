@@ -17,6 +17,25 @@
       "google_verified_domains": [],
       "staff_created": true,
       "verification_days": 365
+    },
+    "guest": {
+      "role": "Guest",
+      "google_verified_domains": [],
+      "staff_created": false,
+      "github_check": false,
+      "active_on_signup": true,
+      "lifetime_hours": 3,
+      "allowed_requests": [
+        "GET /",
+        "GET /api/id",
+        "GET /login",
+        "POST /api/authenticate",
+        "POST /login",
+        "GET /logout",
+        "DELETE /api/authenticate",
+        "GET /api/microblog",
+        "POST /api/microblog/reply"
+      ]
     }
   }
 }
