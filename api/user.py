@@ -87,11 +87,11 @@ def _consume_reset_token(uid, token):
         return True
 
 
-def _staff_caller():
-    """The logged-in, active Teacher or Admin making this request, or None. It asks the same
-    token_required check every staff endpoint uses, so an inactive account, a stale or garbage
-    login, and a role that is not in staff_roles all come back as None."""
-    probe = token_required(account_types.staff_roles())(lambda: g.current_user)
+def _admin_caller():
+    """The logged-in, active Admin making this request, or None. It asks the same token_required
+    check every Admin endpoint uses, so an inactive account, a stale or garbage login, and any
+    other role all come back as None."""
+    probe = token_required(account_types.admin_role())(lambda: g.current_user)
     caller = probe()
     return caller if isinstance(caller, User) else None
 
@@ -186,10 +186,16 @@ class UserAPI:
             if uid is None or len(uid) < 2:
                 return {'message': f'User ID is missing, or is less than 2 characters'}, 400
           
-            # check if uid is a GitHub account. A logged-in Teacher or Admin may create test
-            # accounts that are not.
-            staff = _staff_caller()
-            if staff is None:
+            # A test account is a student an Admin tags as a test: it needs no GitHub account and
+            # no Google sign-in, and only a logged-in, active Admin can make one.
+            is_test = body.get('isTest') is True
+            admin = None
+            if is_test:
+                admin = _admin_caller()
+                if admin is None:
+                    return {'message': 'Only an Admin can create a test account'}, 403
+            else:
+                # check if uid is a GitHub account
                 _, status = GitHubUser().get(uid)
                 if status != 200:
                     return {'message': f'User ID {uid} not a valid GitHub account' }, 404
@@ -198,9 +204,10 @@ class UserAPI:
             # The account type (see model/account_types.json) sets the role. A type with Google
             # domains is activated only when Google verifies an email in them for the submitted
             # token; any other type stays inactive until a Teacher/Admin verifies it.
-            account_type = account_types.get(body.get('accountType'))
+            # A test account is always the default type (a student), whatever was asked for.
+            account_type = account_types.get(None if is_test else body.get('accountType'))
             role = account_type['role']
-            domains = account_type['google_verified_domains']
+            domains = [] if is_test else account_type['google_verified_domains']
             verified_email = verified_google_email(body.get('idToken'), domains) if domains else None
 
             #1: Setup minimal User object using __init__ method
@@ -211,6 +218,8 @@ class UserAPI:
             else:
                 user_obj = User(name=name, uid=uid, role=role)
             
+            user_obj.is_test = is_test
+
             # Handle additional fields that frontend sends
             # Create a cleaned body with only the fields User model expects
             cleaned_body = {
@@ -247,6 +256,9 @@ class UserAPI:
                     # Check if user was actually created in database despite create() returning None
                     db_user = User.query.filter_by(_uid=uid).first()
                     if db_user:
+                        if is_test:
+                            # an Admin asked for a new test account: say it already exists
+                            return {'message': f'User ID {uid} already exists'}, 409
                         #print(f"User exists in DB but create returned None: {db_user.uid}")
                         return jsonify(_without_password(db_user.read()))  # Return the user anyway
                     else:
@@ -254,9 +266,9 @@ class UserAPI:
 
                 if verified_email:
                     user.activate()
-                if staff is not None:
+                if admin is not None:
                     # %r quotes the uid, so a newline in it cannot forge a second log line
-                    current_app.logger.info("AUDIT signup uid=%r created by staff uid=%r without a GitHub check", user.uid, staff.uid)
+                    current_app.logger.info("AUDIT signup uid=%r created as a test account by admin uid=%r", user.uid, admin.uid)
 
                 #print(f"Successfully created user: {user.uid}")
                 # return response, the created user details as a JSON object

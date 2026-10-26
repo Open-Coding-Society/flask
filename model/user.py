@@ -194,6 +194,12 @@ class User(db.Model, UserMixin):
     active = db.Column(db.Boolean, default=False, nullable=False)
     last_verified = db.Column(db.DateTime, nullable=True)
 
+    # Marks an account an Admin made for testing (a student with no GitHub or Google check). An
+    # existing database needs this once, BEFORE this code is deployed. It is safe to run first:
+    # the code that is already running ignores the extra column.
+    #   ALTER TABLE users ADD COLUMN is_test BOOLEAN NOT NULL DEFAULT 0;
+    is_test = db.Column(db.Boolean, default=False, nullable=False)
+
     # Define many-to-many relationship with Section model through UserSection table
     # Overlaps setting silences SQLAlchemy warnings about multiple relationship paths
     # No backref needed as Section has its own 'users' relationship
@@ -599,6 +605,7 @@ class User(db.Model, UserMixin):
             "school": self.school,
             "game_profile": self.game_profile,
             "active": self.active,
+            "is_test": bool(self.is_test),
             "last_verified": self.last_verified.isoformat() if self.last_verified else None,
             "verification_state": self.verification_state,
         }
