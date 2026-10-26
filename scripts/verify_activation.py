@@ -393,6 +393,242 @@ def main():
                 check("who may bypass comes from the data: with Teacher dropped from staff_roles a Teacher no longer can (404)",
                       r.status_code == 404 and get("zz_fake_data") is None, r.status_code)
 
+    # ---- a guest: anyone can sign up, active at once, and can only view and comment, for a few hours ----
+    from model import account_types as _gt
+
+    class NeverAGitHubAccount:
+        def get(self, uid):
+            return ({}, 404)
+
+    def set_verified_ago(uid, **delta):
+        with app.app_context():
+            u = User.query.filter_by(_uid=uid).first()
+            u.last_verified = datetime.utcnow() - timedelta(**delta)
+            db.session.commit()
+
+    def count_users(uid):
+        with app.app_context():
+            return User.query.filter_by(_uid=uid).count()
+
+    with patch("api.user.GitHubUser", NeverAGitHubAccount), patch("model.google_token.requests.get", fake_tokeninfo):
+        with app.test_client() as c:
+            r = signup(c, "zz_guest1", accountType="guest", name="Guest One", email="guest1@example.com")
+            u = get("zz_guest1")
+            check("anyone can sign up as a guest with a uid that is not a GitHub account: created (200), role Guest, active at once",
+                  r.status_code == 200 and u and u["role"] == "Guest" and u["active"] is True and "password" not in r.get_json(), f"{r.status_code} {u}")
+            r = signup(c, "zz_guest2", accountType="guest", idToken="not-a-token")
+            check("a guest needs no Google sign-in: a bad token is ignored", r.status_code == 200 and get("zz_guest2")["role"] == "Guest", r.status_code)
+            r = signup(c, "zz_guest3", accountType="guest", role="Admin")
+            check("a guest cannot ask for another role in the request", r.status_code == 200 and get("zz_guest3")["role"] == "Guest", f"{r.status_code} {get('zz_guest3')}")
+            r = signup(c, "z", accountType="guest")
+            check("the uid length check applies to a guest (400)", r.status_code == 400, r.status_code)
+            r = signup(c, "zz_guest_weak", accountType="guest", password="weak")
+            check("the password rule applies to a guest (400) and nothing is created", r.status_code == 400 and count_users("zz_guest_weak") == 0, r.status_code)
+            r = signup(c, "zz_guest1", accountType="guest", password=PASSWORD, name="Someone Else")
+            check("a repeated uid says it already exists (409), with no other account's details, and creates nothing",
+                  r.status_code == 409 and "email" not in r.get_json() and count_users("zz_guest1") == 1, f"{r.status_code} {r.get_data(as_text=True)[:80]}")
+            r = signup(c, "zz_fake_student_check", accountType="student")
+            check("an ordinary student with a uid that is not a GitHub account is still refused (404)", r.status_code == 404 and count_users("zz_fake_student_check") == 0, r.status_code)
+
+        # what a guest can and cannot do
+        with app.test_client() as c:
+            login(c, "zz_student")
+            post = c.post("/api/microblog", json={"content": "a post to comment on"})
+            post_id = (post.get_json() or {}).get("id")
+        with app.test_client() as c:
+            r = c.post("/api/authenticate", json={"uid": "zz_guest1", "password": PASSWORD})
+            who = (r.get_json() or {}).get("user", {})
+            check("a guest can log in, and the login says the account is limited", r.status_code == 200 and who.get("role") == "Guest" and who.get("limited") is True, f"{r.status_code} {who}")
+            check("a student's login says it is not limited", login_user_body("zz_student").get("limited") is False, str(login_user_body("zz_student")))
+            check("a guest can ask who they are (200)", c.get("/api/id").status_code == 200)
+            r = c.get("/api/microblog")
+            check("a guest can view the microblog (200)", r.status_code == 200 and "microblogs" in r.get_json(), r.status_code)
+            r = c.post("/api/microblog/reply", json={"postId": post_id, "content": "a guest comment"})
+            check("a guest can comment on a microblog post (200)", post_id is not None and r.status_code == 200 and "reply" in r.get_json(), f"{post_id} {r.status_code}")
+            denied = [("POST", "/api/microblog", {"content": "a new post"}), ("POST", "/api/microblog/reaction", {"postId": post_id, "type": "like"}),
+                      ("PUT", "/api/user", {"name": "Hacked"}), ("GET", "/api/user", None), ("GET", "/api/user/section", None),
+                      ("POST", "/api/user/section", {"sections": []}), ("DELETE", "/api/user", {"uid": "zz_student"}),
+                      ("GET", "/api/user/class", None), ("POST", "/api/user/zz_student/verify", {})]
+            for method, path, body in denied:
+                r = c.open(path, method=method, json=body)
+                check(f"a guest cannot {method} {path} (403)", r.status_code == 403, r.status_code)
+            with app.app_context():
+                kept_name = User.query.filter_by(_uid="zz_guest1").first().name
+            check("the guest's name was not changed by the refused update", kept_name == "Guest One", kept_name)
+            r = c.delete("/api/authenticate")
+            check("a guest can log out (200)", r.status_code == 200, r.status_code)
+        with app.test_client() as c:
+            login(c, "zz_student")
+            check("the same requests still work for a student: update own profile (200) and post to the microblog (200)",
+                  c.put("/api/user", json={"name": "Student Renamed"}).status_code == 200 and c.post("/api/microblog", json={"content": "x"}).status_code == 200)
+        with app.test_client() as c:
+            c.post("/login", data={"username": "zz_guest1", "password": PASSWORD})
+            r = c.put("/api/user", json={"name": "Via the form login"})
+            check("the limit holds for the Flask form login (session), not only the token (403)", r.status_code == 403, r.status_code)
+
+        # a guest lasts a few hours
+        with app.test_client() as c:
+            login(c, "zz_guest2")
+            set_verified_ago("zz_guest2", hours=2, minutes=59)
+            check("a guest is still usable just inside the lifetime (200)", c.get("/api/id").status_code == 200)
+            set_verified_ago("zz_guest2", hours=3, minutes=1)
+            r = c.get("/api/id")
+            check("a guest is refused once the lifetime has passed (403)", r.status_code == 403 and "expired" in r.get_json()["message"].lower(), f"{r.status_code} {r.get_data(as_text=True)[:90]}")
+            r2 = c.post("/api/authenticate", json={"uid": "zz_guest2", "password": PASSWORD})
+            check("and cannot log in again (403)", r2.status_code == 403 and "expired" in r2.get_json()["message"].lower(), f"{r2.status_code} {r2.get_data(as_text=True)[:90]}")
+        set_verified_ago("zz_student", days=400)
+        with app.test_client() as c:
+            login(c, "zz_student")
+            check("the lifetime applies only to guests: a student with an old verification is not refused", c.get("/api/id").status_code == 200)
+        with app.app_context():
+            User.query.filter_by(_uid="zz_student").first().activate()
+        with app.test_client() as c:
+            login(c, "zz_admin")
+            c.post("/api/user/zz_guest3/deactivate")
+        with app.test_client() as c:
+            r = c.post("/api/authenticate", json={"uid": "zz_guest3", "password": PASSWORD})
+            check("an Admin can deactivate a guest, and it can no longer use the API", r.status_code == 200 and c.get("/api/id").status_code == 403, f"{r.status_code}")
+
+        # Flask's own login form makes a session: the limits must hold there too
+        with app.test_client() as c:
+            c.post("/login", data={"username": "zz_guest1", "password": PASSWORD})
+            for path in ("/users/table2", "/sections/", "/persona/", "/congrats"):
+                r = c.get(path)
+                check(f"a guest logged in through the form cannot open {path} (403)", r.status_code == 403, r.status_code)
+            check("the form login's landing page works for a guest, not a JSON error (200)", c.get("/").status_code == 200, c.get("/").status_code)
+            check("and can still ask who they are (200) and log out", c.get("/api/id").status_code == 200 and c.get("/logout").status_code == 302)
+            check("after logging out the session is gone (401)", c.get("/api/id").status_code == 401)
+        with app.test_client() as c:
+            c.post("/login", data={"username": "zz_guest1", "password": PASSWORD})
+            r = c.post("/api/authenticate", json={"uid": "zz_student", "password": PASSWORD})
+            check("a guest's session can still log in as somebody else (200), so it is never stuck", r.status_code == 200, r.status_code)
+        set_verified_ago("zz_guest1", minutes=1)
+        with app.test_client() as c:
+            c.post("/login", data={"username": "zz_guest1", "password": PASSWORD})
+            set_verified_ago("zz_guest1", hours=3, minutes=1)
+            r = c.get("/users/table2")
+            check("a form-login session stops working when the lifetime passes (not 200)", r.status_code in (302, 401, 403), r.status_code)
+            check("and so does the API through that session (not 200)", c.get("/api/id").status_code in (401, 403))
+        set_verified_ago("zz_guest1", minutes=1)
+        with app.app_context():
+            guest_row = User.query.filter_by(_uid="zz_guest1").first()
+            session_id = f"{guest_row.id}:{guest_row.token_version}"
+        with app.app_context():
+            fresh_session = main.load_user(session_id)
+        set_verified_ago("zz_guest1", hours=3, minutes=1)
+        with app.app_context():
+            expired_session = main.load_user(session_id)
+        set_verified_ago("zz_guest1", minutes=1)
+        check("a session for an account whose lifetime has passed is not a login at all (load_user)",
+              fresh_session is not None and expired_session is None, f"fresh found: {fresh_session is not None}, expired found: {expired_session is not None}")
+
+        set_verified_ago("zz_guest1", hours=3, minutes=1)
+        with app.test_client() as c:
+            page = c.post("/login", data={"username": "zz_guest1", "password": PASSWORD}).get_data(as_text=True)
+            check("the Flask login form tells an expired guest the account has expired", "expired" in page.lower(), page[:100])
+        set_verified_ago("zz_guest1", minutes=1)
+
+        # the allowed requests are matched in one place
+        check("a trailing slash does not change what is allowed, a different method does, and an unlimited role is always allowed",
+              _gt.request_allowed("Guest", "GET", "/api/microblog/") and not _gt.request_allowed("Guest", "POST", "/api/microblog")
+              and not _gt.request_allowed("Guest", "GET", "/api/user") and _gt.request_allowed("User", "DELETE", "/api/user"))
+
+        # staff cannot verify a guest: that would restart or end its few hours
+        with app.test_client() as c:
+            login(c, "zz_teacher")
+            before_verified = get("zz_guest1")["last_verified"]
+            r = c.post("/api/user/zz_guest1/verify", json={"days": 1})
+            check("a Teacher cannot verify a guest (400), and the guest's clock is untouched",
+                  r.status_code == 400 and get("zz_guest1")["last_verified"] == before_verified, f"{r.status_code}")
+
+        # an open sign-up needs a password, and an expired guest's name is free again
+        with app.test_client() as c:
+            body = dict(name="No Password", uid="zz_guest_nopw", accountType="guest", email="x@example.com")
+            r = c.post("/api/user", json=body)
+            check("a guest cannot be created without a password (400), so none gets the default one",
+                  r.status_code == 400 and count_users("zz_guest_nopw") == 0, f"{r.status_code} {r.get_data(as_text=True)[:80]}")
+            signup(c, "zz_guest_old", accountType="guest")
+            r = signup(c, "zz_guest_old", accountType="guest")
+            check("a guest uid that is still in use stays taken (409)", r.status_code == 409, r.status_code)
+            set_verified_ago("zz_guest_old", hours=3, minutes=1)
+            r = signup(c, "zz_guest_old", accountType="guest", password="weak", name="Rejected")
+            with app.app_context():
+                still_old = User.query.filter_by(_uid="zz_guest_old").first()
+            check("a sign-up that is refused (a weak password, 400) does not remove the expired account it would have replaced",
+                  r.status_code == 400 and still_old is not None and still_old.name != "Rejected", f"{r.status_code}")
+            new_password = "Aa1!" + secrets.token_urlsafe(8)
+            r = signup(c, "zz_guest_old", accountType="guest", password=new_password, name="Fresh Guest")
+            with app.app_context():
+                fresh = User.query.filter_by(_uid="zz_guest_old").first()
+                reused = fresh is not None and fresh.name == "Fresh Guest" and fresh.is_password(new_password) and not fresh.expired()
+            check("once a guest has expired its uid is free again: a new guest can take it (200) and the old account is gone",
+                  r.status_code == 200 and count_users("zz_guest_old") == 1 and reused, f"{r.status_code} {count_users('zz_guest_old')} {reused}")
+
+        import logging
+
+        class CollectAudit(logging.Handler):
+            def __init__(self):
+                super().__init__(logging.INFO)
+                self.lines = []
+            def emit(self, record):
+                if "AUDIT" in record.getMessage():
+                    self.lines.append(record.getMessage())
+        audit = CollectAudit()
+        app.logger.addHandler(audit)
+        old_level = app.logger.level
+        app.logger.setLevel(logging.INFO)
+        try:
+            with app.test_client() as c:
+                login(c, "zz_teacher")
+                signup(c, "zz_guest_by_staff", accountType="guest")
+                no_line_for_guest = [l for l in audit.lines if "zz_guest_by_staff" in l]
+                signup(c, "zz_mentor_by_staff", accountType="mentor")
+                line_for_mentor = [l for l in audit.lines if "zz_mentor_by_staff" in l]
+            check("a staff member creating a guest is not logged as skipping a GitHub check, since none was needed", no_line_for_guest == [], str(no_line_for_guest))
+            check("but staff creating an ordinary account that skips it still is", len(line_for_mentor) == 1, str(line_for_mentor))
+        finally:
+            app.logger.removeHandler(audit)
+            app.logger.setLevel(old_level)
+
+        # the rules come from the data
+        changed = copy.deepcopy(_gt._data)
+        changed["account_types"]["guest"]["lifetime_hours"] = 1
+        set_verified_ago("zz_guest1", hours=2)
+        with patch.object(_gt, "_data", changed):
+            with app.test_client() as c:
+                r = c.post("/api/authenticate", json={"uid": "zz_guest1", "password": PASSWORD})
+                check("the lifetime comes from the data: with 1 hour a guest verified 2 hours ago is refused (403)", r.status_code == 403, r.status_code)
+        set_verified_ago("zz_guest1", minutes=1)
+        changed = copy.deepcopy(_gt._data)
+        changed["account_types"]["guest"]["allowed_requests"] = ["GET /api/id", "GET /api/user"]
+        with patch.object(_gt, "_data", changed):
+            with app.test_client() as c:
+                login(c, "zz_guest1")
+                check("what a guest may do comes from the data: with the list changed, GET /api/user (200) is allowed and commenting (403) is not",
+                      c.get("/api/user").status_code == 200 and c.post("/api/microblog/reply", json={"postId": post_id, "content": "x"}).status_code == 403)
+
+        # the startup check refuses data that would make a public type unsafe
+        def refused(mutate):
+            bad = copy.deepcopy(_gt._data)
+            mutate(bad)
+            try:
+                _gt._check(bad)
+                return False
+            except ValueError:
+                return True
+        check("startup refuses a type that skips the GitHub check but has no list of allowed requests",
+              refused(lambda d: d["account_types"]["guest"].pop("allowed_requests")))
+        check("startup refuses an empty list of allowed requests", refused(lambda d: d["account_types"]["guest"].update(allowed_requests=[])))
+        check("startup refuses a public type whose role is an Admin or Teacher role",
+              refused(lambda d: d["account_types"]["guest"].update(role="Teacher")) and refused(lambda d: d["account_types"]["guest"].update(role=d["admin_role"])))
+        check("startup refuses an allowed request that is not written as METHOD /path",
+              refused(lambda d: d["account_types"]["guest"].update(allowed_requests=["/api/id"])))
+        check("startup refuses flags that are not true or false",
+              refused(lambda d: d["account_types"]["guest"].update(github_check="false")) and refused(lambda d: d["account_types"]["guest"].update(active_on_signup="yes")))
+        check("startup refuses two account types that share a role", refused(lambda d: d["account_types"]["guest"].update(role="User")))
+        check("startup refuses a lifetime that is not a positive number of hours",
+              refused(lambda d: d["account_types"]["guest"].update(lifetime_hours=0)) and refused(lambda d: d["account_types"]["guest"].update(lifetime_hours="3")))
+
     # update() cannot self-activate
     with app.app_context():
         u = User.query.filter_by(_uid="zz_noclient").first()
