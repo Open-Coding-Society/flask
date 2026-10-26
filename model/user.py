@@ -377,6 +377,16 @@ class User(db.Model, UserMixin):
         db.session.commit()
         return self
 
+    def restore_state(self, user_data):
+        """Carry active and last_verified over from an exported user (read()), so a backup
+        restore keeps every account as it was instead of leaving it inactive. A backup taken
+        before these columns existed has no 'active' key; those accounts were all active,
+        as in the migration SQL next to the columns. Call before create(); no commit."""
+        self.active = bool(user_data.get('active', True))
+        last_verified = user_data.get('last_verified')
+        self.last_verified = datetime.fromisoformat(last_verified) if last_verified else None
+        return self
+
     def is_last_active_essential(self):
         """True when this is the only active account of a role the system must keep."""
         return (self.active and self.role in account_types.essential_roles()
