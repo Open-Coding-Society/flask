@@ -110,6 +110,7 @@ class UserAPI:
             return jsonify(user_data)
     
     class _BULK(Resource):  # Users API operation for Create, Read, Update, Delete 
+        @token_required("Admin")
         def post(self):
             ''' Handle bulk user creation by sending POST requests to the single user endpoint '''
             users = request.get_json()
