@@ -1,6 +1,16 @@
-# README
+# Introduction
 
-> This is a project to support AP Computer Science Principles (APCSP) as well as a UC articulated Data Structures course. It was crafted iteratively starting in 2020 to the present time.  The primary purposes are ...
+Founded and maintained by John Mortensen, Open Coding Society's Flask project grew from a classroom need: helping students move beyond writing individual programs to building web applications that store data, communicate through APIs, and support real users.
+
+Developed iteratively since 2020, Flask has supported AP Computer Science Principles and Data Structures coursework. What began as a learning environment has evolved into a reusable backend for student projects, with authentication, database persistence, REST APIs, administrative interfaces, and deployment workflows.
+
+The project reflects OCS's approach to computer science education: students learn by building systems, examining how the pieces fit together, and extending working examples into their own applications. Contributions from students and educators have helped the project evolve, including former student Aiden Wu's work on authentication.
+
+This repository serves two purposes: it is a starting point for new projects and a working codebase through which students can explore how web applications are assembled, tested, secured, and deployed.
+
+Use it as a template for your own application, or fork it if you intend to contribute improvements back to Open Coding Society.
+
+## History
 
 - Used as starter code for student projects for `AP CSP 1 and 2` and `Data Structures 1` curriculum.
 - Used to teach key principles in learning the Python Flask programming environment.
