@@ -7,7 +7,7 @@ real dev DB before and after to prove it was never touched.
 Usage:  python scripts/verify_activation.py        (from the flask repo root)
 Exit:   0 all checks passed, 1 otherwise.
 """
-import copy, hashlib, os, secrets, shutil, sys, tempfile
+import copy, hashlib, json, os, re, secrets, shutil, sys, tempfile
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -288,110 +288,352 @@ def main():
               and get("zz_due3")["state"] == "active_verification_required" and get("zz_due4")["state"] == "active_verified",
               f"{r_old.status_code} {r_new.status_code}")
 
-    # ---- a logged-in Teacher or Admin can create test accounts that are not real GitHub accounts ----
-    from model import account_types as _types
+    # ---- the Guest Window and the guest account --------------------------------------------------
+    import logging
+    from model import account_types as _gt
+    from model import guest_window as _gw
+    import api.authorize as _authz
 
-    class OnlyRealGitHub:
+    class NeverAGitHubAccount:
         def get(self, uid):
-            return ({}, 404) if uid.startswith("zz_fake") else ({}, 200)
+            return ({}, 404)
 
-    with app.app_context():
-        db.session.add(User(name="zz_teacher_off", uid="zz_teacher_off", password=PASSWORD, role="Teacher"))  # never activated
-        db.session.commit()
+    app.config["GUEST_WINDOW_FILE"] = os.path.join(tmp, "guest_window.json")
 
-    with patch("api.user.GitHubUser", OnlyRealGitHub):
+    def set_verified_ago(uid, **delta):
+        with app.app_context():
+            u = User.query.filter_by(_uid=uid).first()
+            u.last_verified = datetime.utcnow() - timedelta(**delta)
+            db.session.commit()
+
+    def row(uid):
+        with app.app_context():
+            u = User.query.filter_by(_uid=uid).first()
+            return None if u is None else dict(id=u.id, active=u.active, role=u.role, name=u.name, last_verified=u.last_verified)
+
+    def count_users(uid):
+        with app.app_context():
+            return User.query.filter_by(_uid=uid).count()
+
+    def staff(uid, method, path, **kw):
+        with app.test_client() as sc:
+            login(sc, uid)
+            return sc.open(path, method=method, **kw)
+
+    def window():
+        with app.test_client() as wc:
+            return wc.get("/api/guest/window").get_json()
+
+    class CollectAudit(logging.Handler):
+        def __init__(self):
+            super().__init__(logging.INFO)
+            self.lines = []
+        def emit(self, record):
+            if "AUDIT" in record.getMessage():
+                self.lines.append(record.getMessage())
+    audit = CollectAudit()
+    app.logger.addHandler(audit)
+    app.logger.setLevel(logging.INFO)
+
+    with patch("api.user.GitHubUser", NeverAGitHubAccount), patch("model.google_token.requests.get", fake_tokeninfo):
+        # the staff rule from before is retired: staff must have a real GitHub uid like everyone
+        for who in ("zz_teacher", "zz_admin"):
+            for kind in ("student", "mentor"):
+                with app.test_client() as c:
+                    login(c, who)
+                    r = signup(c, f"zz_fake_{kind}_{who[3:]}", accountType=kind)
+                    check(f"{who[3:].title()} signing up an ordinary {kind} with a uid that is not a GitHub account is refused (404): no staff bypass",
+                          r.status_code == 404 and count_users(f"zz_fake_{kind}_{who[3:]}") == 0, r.status_code)
+
+        # ---- the window is closed to start with
+        check("the Guest Window starts closed, and anyone can ask", window() == {"open": False, "closes_at": None}, str(window()))
         with app.test_client() as c:
-            r = signup(c, "zz_fake_anon", accountType="mentor")
-            check("not logged in: a uid that is not a GitHub account is refused (404) and nothing is created",
-                  r.status_code == 404 and "GitHub" in r.get_json()["message"] and get("zz_fake_anon") is None, r.status_code)
+            r = signup(c, "zz_guest_early", accountType="guest")
+            check("while the window is closed nobody can sign up as a guest (403), and nothing is created",
+                  r.status_code == 403 and "closed" in r.get_json()["message"].lower() and count_users("zz_guest_early") == 0, f"{r.status_code} {r.get_data(as_text=True)[:80]}")
         with app.test_client() as c:
-            r = signup(c, "zz_real_anon", accountType="mentor")
-            check("not logged in: a real GitHub uid still signs up (200)", r.status_code == 200 and get("zz_real_anon"), r.status_code)
+            check("only staff can open it: not logged in (401)", c.post("/api/guest/window", json={"minutes": 60}).status_code == 401)
         with app.test_client() as c:
             login(c, "zz_student")
-            r = signup(c, "zz_fake_student", accountType="mentor")
-            check("logged in as a student: no bypass (404)", r.status_code == 404 and get("zz_fake_student") is None, r.status_code)
-        with app.test_client() as c:
-            logged_in = c.post("/api/authenticate", json={"uid": "zz_teacher_off", "password": PASSWORD})
-            r = signup(c, "zz_fake_off", accountType="mentor")
-            check("an inactive Teacher, who can log in but is not active, cannot bypass (404)",
-                  logged_in.status_code == 200 and c.get_cookie(app.config["JWT_TOKEN_NAME"]) is not None
-                  and r.status_code == 404 and get("zz_fake_off") is None, f"login {logged_in.status_code}, signup {r.status_code}")
-        with app.test_client() as c:
-            c.set_cookie(app.config["JWT_TOKEN_NAME"], "not-a-real-token")
-            r = signup(c, "zz_fake_badjwt", accountType="mentor")
-            check("a garbage login cookie does not bypass (404)", r.status_code == 404 and get("zz_fake_badjwt") is None, r.status_code)
+            check("a student cannot open it (403) or close it or disable guests",
+                  c.post("/api/guest/window", json={"minutes": 60}).status_code == 403 and c.delete("/api/guest/window").status_code == 403
+                  and c.post("/api/guest/disable").status_code == 403)
+        check("and the window is still closed", window()["open"] is False)
 
-        for staff in ("zz_teacher", "zz_admin"):
-            with app.test_client() as c:
-                login(c, staff)
-                r = signup(c, f"zz_fake_by_{staff[3:]}", accountType="mentor")
-                u = get(f"zz_fake_by_{staff[3:]}")
-                check(f"logged in as {staff[3:].title()}: a uid that is not a GitHub account can be created (200, an inactive Mentor)",
-                      r.status_code == 200 and u and u["role"] == "Mentor" and u["active"] is False, f"{r.status_code} {u}")
+        # ---- a Teacher opens it, for a limited time
+        r = staff("zz_teacher", "POST", "/api/guest/window", json={"minutes": 60})
+        body = r.get_json() or {}
+        closes = datetime.fromisoformat(body["closes_at"]) if body.get("closes_at") else None
+        minutes_left = (closes - datetime.utcnow()).total_seconds() / 60 if closes else None
+        check("a Teacher can open the window for 60 minutes (200)", r.status_code == 200 and body.get("open") is True and minutes_left and 59 < minutes_left <= 60, f"{r.status_code} {body}")
+        check("anyone can see that it is open and when it closes, and nothing else (not who opened it)",
+              window()["open"] is True and set(window()) == {"open", "closes_at"}, str(window()))
+        first_close = window()["closes_at"]
+        for bad in (0, 181, -5, "60", 1.5, True, None):
+            r = staff("zz_teacher", "POST", "/api/guest/window", json={"minutes": bad})
+            check(f"minutes={bad!r} is refused (400) and the window is unchanged", r.status_code == 400 and window()["closes_at"] == first_close, r.status_code)
+        r = staff("zz_teacher", "POST", "/api/guest/window", json={})
+        check("a request with no minutes is refused (400)", r.status_code == 400, r.status_code)
+        check("it is kept in a file, so it survives a restart and is shared by every worker (no database table)",
+              os.path.exists(app.config["GUEST_WINDOW_FILE"]) and "closes_at" in open(app.config["GUEST_WINDOW_FILE"]).read())
+        changed = copy.deepcopy(_gt._data)
+        changed["account_types"]["guest"]["window_max_minutes"] = 30
+        with patch.object(_gt, "_data", changed):
+            over = staff("zz_teacher", "POST", "/api/guest/window", json={"minutes": 31})
+            at_max = staff("zz_teacher", "POST", "/api/guest/window", json={"minutes": 30})
+        check("the longest a window can be comes from the data: with a 30 minute maximum 31 is refused (400) and 30 is allowed",
+              over.status_code == 400 and at_max.status_code == 200, f"{over.status_code} {at_max.status_code}")
+        r = staff("zz_teacher", "POST", "/api/guest/window", json={"minutes": 180})
+        check("and the default maximum is 3 hours (180 minutes)", r.status_code == 200, r.status_code)
+
+        # ---- it closes by itself
+        with open(app.config["GUEST_WINDOW_FILE"], "w") as fh:
+            json.dump({"closes_at": (datetime.utcnow() - timedelta(minutes=1)).isoformat()}, fh)
+        with app.test_client() as c:
+            check("a window whose time has passed is closed again", window()["open"] is False and signup(c, "zz_guest_late", accountType="guest").status_code == 403)
+        staff("zz_teacher", "POST", "/api/guest/window", json={"minutes": 120})
+        r = staff("zz_admin", "DELETE", "/api/guest/window")
+        check("staff can close the window at any time (200)", r.status_code == 200 and window()["open"] is False, r.status_code)
+        staff("zz_teacher", "POST", "/api/guest/window", json={"minutes": 120})
+        check("the window was opened, and closed, with a note of who did it in the log",
+              any("guest window opened" in l and "zz_teacher" in l for l in audit.lines) and any("guest window closed" in l and "zz_admin" in l for l in audit.lines), str(audit.lines[-3:]))
+
+        # ---- while it is open, anyone can sign up
+        with app.test_client() as c:
+            r = signup(c, "zz_guest1", accountType="guest", name="Guest One", email="guest1@example.com")
+            u = row("zz_guest1")
+            check("while the window is open anyone can sign up as a guest with a uid that is not a GitHub account: created (200), role Guest, active at once",
+                  r.status_code == 200 and u and u["role"] == "Guest" and u["active"] is True and "password" not in r.get_json(), f"{r.status_code} {u}")
+            r = signup(c, "zz_guest2", accountType="guest", idToken="not-a-token")
+            check("a guest needs no Google sign-in: a bad token is ignored", r.status_code == 200 and row("zz_guest2")["role"] == "Guest", r.status_code)
+            r = signup(c, "zz_guest3", accountType="guest", role="Admin")
+            check("a guest cannot ask for another role in the request", r.status_code == 200 and row("zz_guest3")["role"] == "Guest", f"{r.status_code} {row('zz_guest3')}")
+            check("the uid length check applies to a guest (400)", signup(c, "z", accountType="guest").status_code == 400)
+            r = signup(c, "zz_guest_weak", accountType="guest", password="weak")
+            check("the password rule applies to a guest (400) and nothing is created", r.status_code == 400 and count_users("zz_guest_weak") == 0, r.status_code)
+            r = c.post("/api/user", json=dict(name="No Password", uid="zz_guest_nopw", accountType="guest", email="x@example.com"))
+            check("a guest cannot be created without a password (400), so none gets the default one", r.status_code == 400 and count_users("zz_guest_nopw") == 0, r.status_code)
+            r = signup(c, "zz_guest1", accountType="guest", password=PASSWORD, name="Someone Else")
+            check("a repeated uid says it already exists (409), tells them to log in, shows nothing about the account, and creates nothing",
+                  r.status_code == 409 and "email" not in r.get_json() and "log in" in r.get_json()["message"].lower() and count_users("zz_guest1") == 1,
+                  f"{r.status_code} {r.get_data(as_text=True)[:100]}")
+            r = signup(c, "zz_fake_student_check", accountType="student")
+            check("an ordinary student with a uid that is not a GitHub account is still refused (404)", r.status_code == 404 and count_users("zz_fake_student_check") == 0, r.status_code)
+
+        # ---- what a guest can and cannot do
+        with app.test_client() as c:
+            login(c, "zz_student")
+            post_id = (c.post("/api/microblog", json={"content": "a post to comment on"}).get_json() or {}).get("id")
+        with app.test_client() as c:
+            r = c.post("/api/authenticate", json={"uid": "zz_guest1", "password": PASSWORD})
+            who = (r.get_json() or {}).get("user", {})
+            check("a guest can log in, and the login says the account is limited", r.status_code == 200 and who.get("role") == "Guest" and who.get("limited") is True, f"{r.status_code} {who}")
+            check("a student's login says it is not limited", login_user_body("zz_student").get("limited") is False)
+            check("a guest can ask who they are (200)", c.get("/api/id").status_code == 200)
+            r = c.get("/api/microblog")
+            check("a guest can view the microblog (200)", r.status_code == 200 and "microblogs" in r.get_json(), r.status_code)
+            r = c.post("/api/microblog/reply", json={"postId": post_id, "content": "a guest comment"})
+            check("a guest can comment on a post (200)", post_id is not None and r.status_code == 200 and "reply" in r.get_json(), f"{post_id} {r.status_code}")
+            r = c.post("/api/microblog/reaction", json={"postId": post_id, "reactionType": "like"})
+            check("a guest can react to a post (200)", r.status_code == 200, f"{r.status_code} {r.get_data(as_text=True)[:80]}")
+            r = c.delete("/api/microblog/reaction", json={"postId": post_id, "reactionType": "like"})
+            check("and take the reaction back (200)", r.status_code == 200, f"{r.status_code} {r.get_data(as_text=True)[:80]}")
+            denied = [("POST", "/api/microblog", {"content": "a new post"}), ("PUT", "/api/user", {"name": "Hacked"}), ("GET", "/api/user", None),
+                      ("GET", "/api/user/section", None), ("POST", "/api/user/section", {"sections": []}), ("DELETE", "/api/user", {"uid": "zz_student"}),
+                      ("GET", "/api/user/class", None), ("POST", "/api/user/zz_student/verify", {}), ("POST", "/api/guest/window", {"minutes": 60}),
+                      ("DELETE", "/api/guest/window", None), ("POST", "/api/guest/disable", None)]
+            for method, path, body in denied:
+                r = c.open(path, method=method, json=body)
+                check(f"a guest cannot {method} {path} (403)", r.status_code == 403, r.status_code)
+            check("the guest's name was not changed by the refused update", row("zz_guest1")["name"] == "Guest One", row("zz_guest1")["name"])
+            check("a guest can log out (200)", c.delete("/api/authenticate").status_code == 200)
+        with app.test_client() as c:
+            login(c, "zz_student")
+            check("the same requests still work for a student: update own profile (200) and post to the microblog (200)",
+                  c.put("/api/user", json={"name": "Student Renamed"}).status_code == 200 and c.post("/api/microblog", json={"content": "x"}).status_code == 200)
+
+        # Flask's own login form makes a session: the limits must hold there too
+        with app.test_client() as c:
+            c.post("/login", data={"username": "zz_guest1", "password": PASSWORD})
+            for path in ("/users/table2", "/sections/", "/persona/", "/congrats"):
+                check(f"a guest logged in through the form cannot open {path} (403)", c.get(path).status_code == 403, c.get(path).status_code)
+            check("the form login's landing page works for a guest (200), and so does asking who they are", c.get("/").status_code == 200 and c.get("/api/id").status_code == 200)
+            check("it can log out, and then the session is gone (401)", c.get("/logout").status_code == 302 and c.get("/api/id").status_code == 401)
+        with app.test_client() as c:
+            c.post("/login", data={"username": "zz_guest1", "password": PASSWORD})
+            r = c.post("/api/authenticate", json={"uid": "zz_student", "password": PASSWORD})
+            check("a guest's session can still log in as somebody else (200), so it is never stuck", r.status_code == 200, r.status_code)
+        with app.test_client() as c:
+            c.post("/login", data={"username": "zz_guest1", "password": PASSWORD})
+            r = c.put("/api/user", json={"name": "Via the form login"})
+            check("the limit holds for the form login session on the API too (403)", r.status_code == 403, r.status_code)
+        check("a trailing slash does not change what is allowed, a different method does, and an unlimited role is always allowed",
+              _gt.request_allowed("Guest", "GET", "/api/microblog/") and not _gt.request_allowed("Guest", "POST", "/api/microblog")
+              and not _gt.request_allowed("Guest", "GET", "/api/user") and _gt.request_allowed("User", "DELETE", "/api/user"))
+
+        # ---- three hours, then inactive, and the record stays
+        with app.test_client() as c:
+            login(c, "zz_guest2")
+            set_verified_ago("zz_guest2", hours=2, minutes=59)
+            check("a guest is still usable just inside the three hours (200)", c.get("/api/id").status_code == 200)
+            set_verified_ago("zz_guest2", hours=3, minutes=1)
+            r = c.get("/api/id")
+            check("a guest is refused once the three hours have passed (403)", r.status_code == 403 and "expired" in r.get_json()["message"].lower(), f"{r.status_code} {r.get_data(as_text=True)[:90]}")
+        check("and the account is now inactive, but the record is kept", row("zz_guest2")["active"] is False and count_users("zz_guest2") == 1, str(row("zz_guest2")))
+        set_verified_ago("zz_student", days=400)
+        with app.test_client() as c:
+            login(c, "zz_student")
+            check("the three hours apply only to guests: a student with an old verification is not refused", c.get("/api/id").status_code == 200)
+        with app.app_context():
+            User.query.filter_by(_uid="zz_student").first().activate()
+
+        # ---- coming back needs an open window
+        staff("zz_teacher", "DELETE", "/api/guest/window")
+        with app.test_client() as c:
+            r = c.post("/api/authenticate", json={"uid": "zz_guest2", "password": PASSWORD})
+            check("with the window closed a returning guest cannot log in (403) and stays inactive",
+                  r.status_code == 403 and "closed" in r.get_json()["message"].lower() and row("zz_guest2")["active"] is False, f"{r.status_code} {r.get_data(as_text=True)[:90]}")
+            r = signup(c, "zz_guest2", accountType="guest")
+            check("and cannot sign up again either (403)", r.status_code == 403, r.status_code)
+        staff("zz_teacher", "POST", "/api/guest/window", json={"minutes": 90})
+        guest_id = row("zz_guest2")["id"]
+        with app.test_client() as c:
+            r = c.post("/api/authenticate", json={"uid": "zz_guest2", "password": PASSWORD})
+            after = row("zz_guest2")
+            check("with the window open the same guest logs in (200) and is active again, for a new three hours, as the same account",
+                  r.status_code == 200 and after["active"] is True and after["id"] == guest_id
+                  and (datetime.utcnow() - after["last_verified"]).total_seconds() < 120 and c.get("/api/id").status_code == 200, f"{r.status_code} {after}")
+            r = c.post("/api/authenticate", json={"uid": "zz_guest2", "password": "wrong-password"})
+            check("a wrong password does not reactivate anything (401)", r.status_code == 401)
+        with app.test_client() as c:
+            page = None
+            set_verified_ago("zz_guest3", hours=3, minutes=1)
+            page = c.post("/login", data={"username": "zz_guest3", "password": PASSWORD}).get_data(as_text=True)
+            check("the Flask login form tells an expired guest the account has expired", "expired" in page.lower(), page[:100])
+        with app.test_client() as c:
+            with app.app_context():
+                gr = User.query.filter_by(_uid="zz_guest1").first()
+                sid = f"{gr.id}:{gr.token_version}"
+            with app.app_context():
+                fresh_session = main.load_user(sid)
+            set_verified_ago("zz_guest1", hours=3, minutes=1)
+            with app.app_context():
+                expired_session = main.load_user(sid)
+            check("a session for an account whose three hours have passed is not a login at all (load_user)",
+                  fresh_session is not None and expired_session is None, f"fresh found: {fresh_session is not None}, expired found: {expired_session is not None}")
+            set_verified_ago("zz_guest1", minutes=1)
         with app.test_client() as c:
             login(c, "zz_teacher")
-            r = signup(c, "zz_fake_student2", accountType="student")
-            u = get("zz_fake_student2")
-            check("a staff-made student test account is created too, inactive until staff activate it (no Google token)",
-                  r.status_code == 200 and u and u["role"] == "User" and u["active"] is False, f"{r.status_code} {u}")
-            with app.app_context():
-                before = User.query.filter_by(_uid="zz_fake_student2").count()
-            other_password = "Aa1!" + secrets.token_urlsafe(8)
-            signup(c, "zz_fake_student2", accountType="mentor", password=other_password, name="Someone Else")
-            with app.app_context():
-                after = User.query.filter_by(_uid="zz_fake_student2").count()
-                kept = User.query.filter_by(_uid="zz_fake_student2").first()
-                untouched = kept.is_password(PASSWORD) and not kept.is_password(other_password) and kept.name == "Name zz_fake_student2"
-            check("a repeated uid creates no second account and changes nothing in the first (role, password, name)",
-                  before == 1 and after == 1 and get("zz_fake_student2")["role"] == "User" and untouched, f"{before} {after} {untouched}")
-            r = signup(c, "z", accountType="student")
-            check("the bypass does not skip the uid length check (400)", r.status_code == 400, r.status_code)
-            r = signup(c, "zz_fake_notstaff", accountType="teacher")
-            u = get("zz_fake_notstaff")
-            check("staff still cannot make a Teacher or Admin this way: an unknown type is an ordinary student",
-                  r.status_code == 200 and u and u["role"] == "User", f"{r.status_code} {u}")
+            before_verified = row("zz_guest1")["last_verified"]
+            r = c.post("/api/user/zz_guest1/verify", json={"days": 1})
+            check("a Teacher cannot verify a guest (400), and the guest's clock is untouched", r.status_code == 400 and row("zz_guest1")["last_verified"] == before_verified, r.status_code)
 
-        # the audit log: one line per account actually created by staff, and no forged lines
-        import logging
+        # ---- the switch that disables guests at once
+        with app.test_client() as c:
+            login(c, "zz_guest1")
+            check("(a guest is logged in and working)", c.get("/api/id").status_code == 200)
+            r = staff("zz_admin", "POST", "/api/guest/disable")
+            body = r.get_json() or {}
+            check("an Admin can disable guest access at once (200): the window closes and every active guest is made inactive",
+                  r.status_code == 200 and body.get("disabled", 0) >= 2 and window()["open"] is False and row("zz_guest1")["active"] is False and row("zz_guest2")["active"] is False, f"{r.status_code} {body}")
+            check("a guest that was logged in is refused straight away (403)", c.get("/api/id").status_code == 403)
+        check("it touches nothing but guests: the student, mentor and staff accounts are still active",
+              all(row(u)["active"] for u in ("zz_student", "zz_teacher", "zz_admin")), str({u: row(u)["active"] for u in ("zz_student", "zz_teacher", "zz_admin")}))
+        check("the switch is logged with who used it and how many guests it affected", any("guest access disabled" in l and "zz_admin" in l for l in audit.lines), str(audit.lines[-2:]))
+        with app.test_client() as c:
+            check("while closed, nobody can come back (403)", c.post("/api/authenticate", json={"uid": "zz_guest1", "password": PASSWORD}).status_code == 403)
+        staff("zz_teacher", "POST", "/api/guest/window", json={"minutes": 60})
+        with app.test_client() as c:
+            check("in a later window a disabled guest can come back (200), the record having been kept",
+                  c.post("/api/authenticate", json={"uid": "zz_guest1", "password": PASSWORD}).status_code == 200 and row("zz_guest1")["active"] is True)
 
-        class Collect(logging.Handler):
-            def __init__(self):
-                super().__init__(logging.INFO)
-                self.lines = []
-            def emit(self, record):
-                if "AUDIT" in record.getMessage():
-                    self.lines.append(record.getMessage())
-        collector = Collect()
-        app.logger.addHandler(collector)
-        old_level = app.logger.level
-        app.logger.setLevel(logging.INFO)
-        try:
+        # ---- one account cannot flood the server
+        changed = copy.deepcopy(_gt._data)
+        changed["account_types"]["guest"]["requests_per_minute"] = 3
+        clock = [1000.0]
+        _authz._recent.clear()
+        with patch.object(_gt, "_data", changed), patch.object(_authz.time, "monotonic", lambda: clock[0]):
+            c1, c2, cs = app.test_client(), app.test_client(), app.test_client()
+            if True:
+                login(c1, "zz_guest1")
+                login(c2, "zz_guest2")  # a guest disabled earlier comes back, the window being open
+                login(cs, "zz_student")
+                codes = [c1.get("/api/id").status_code for _ in range(5)]
+                check("one guest is limited to the number of requests a minute set in the data: 3 allowed, then 429", codes == [200, 200, 200, 429, 429], str(codes))
+                check("another guest is not affected (200)", c2.get("/api/id").status_code == 200)
+                check("a student is never throttled", all(cs.get("/api/id").status_code == 200 for _ in range(10)))
+                clock[0] += 61
+                check("and after a minute the guest can go on (200)", c1.get("/api/id").status_code == 200)
+                clock[0] += 61
+                form = app.test_client()
+                form.post("/login", data={"username": "zz_guest1", "password": PASSWORD})
+                codes = [form.get("/").status_code for _ in range(5)]
+                check("a guest logged in through the form is held to the same limit on the pages too: 3 allowed, then 429", codes == [200, 200, 200, 429, 429], str(codes))
+        _authz._recent.clear()
+
+        # ---- the Account Administration table (a page, so it needs the form login)
+        def table(uid):
             with app.test_client() as c:
-                login(c, "zz_teacher")
-                signup(c, "zz_fake_logged", accountType="mentor")
-                one = list(collector.lines)
-                signup(c, "zz_fake_logged", accountType="mentor")     # a repeat: nothing new is created
-                signup(c, "zz_fake_x", accountType="mentor", password="short")  # refused: too short
-                after_failures = list(collector.lines)
-                signup(c, "zz_fake_nl\nAUDIT signup uid=admin created by staff uid=other", accountType="mentor")
-                forged = list(collector.lines)
-            check("a staff-created account is logged once, with who made it",
-                  len(one) == 1 and "zz_fake_logged" in one[0] and "zz_teacher" in one[0], str(one))
-            check("a repeated uid and a refused signup are not logged as created", after_failures == one, str(after_failures))
-            check("a uid with a newline cannot forge a second log line", all("\n" not in l for l in forged) and len(forged) <= len(one) + 1, str(forged))
-        finally:
-            app.logger.removeHandler(collector)
-            app.logger.setLevel(old_level)
+                c.post("/login", data={"username": uid, "password": PASSWORD})
+                return c.get("/users/table2")
 
-        changed = copy.deepcopy(_types._data)
-        changed["staff_roles"] = ["Admin"]
-        with patch.object(_types, "_data", changed):
+        r = table("zz_teacher")
+        html = r.get_data(as_text=True)
+        check("the table gives staff a Guest Window panel that says whether it is open",
+              r.status_code == 200 and 'id="guestWindow"' in html and "open until" in html, f"{r.status_code}")
+        staff("zz_teacher", "DELETE", "/api/guest/window")
+        html = table("zz_teacher").get_data(as_text=True)
+        check("and says when it is closed, with the Close button disabled",
+              "closed</span>" in html and "open until" not in html and re.search(r'id="guestWindowClose"\s+disabled', html), "")
+        r = table("zz_student")
+        check("a student can see the table (200) but does not get the panel", r.status_code == 200 and 'id="guestWindowOpen"' not in r.get_data(as_text=True), f"{r.status_code}")
+        with app.app_context():
+            User.query.filter_by(_uid="zz_guest3").first().activate()
+        set_verified_ago("zz_guest3", hours=4)
+        check("(an expired guest that nothing has touched is still marked active)", row("zz_guest3")["active"] is True)
+        table("zz_admin")
+        check("opening the table marks expired guests inactive, and keeps them", row("zz_guest3")["active"] is False and count_users("zz_guest3") == 1)
+
+        # ---- the rules come from the data
+        staff("zz_teacher", "POST", "/api/guest/window", json={"minutes": 60})
+        changed = copy.deepcopy(_gt._data)
+        changed["account_types"]["guest"]["lifetime_hours"] = 1
+        set_verified_ago("zz_guest1", hours=2)
+        with patch.object(_gt, "_data", changed):
             with app.test_client() as c:
-                login(c, "zz_teacher")
-                r = signup(c, "zz_fake_data", accountType="mentor")
-                check("who may bypass comes from the data: with Teacher dropped from staff_roles a Teacher no longer can (404)",
-                      r.status_code == 404 and get("zz_fake_data") is None, r.status_code)
+                login_ok = c.post("/api/authenticate", json={"uid": "zz_guest1", "password": PASSWORD})
+                check("the lifetime comes from the data: with 1 hour a guest verified 2 hours ago is made active again by logging in, for a new period",
+                      login_ok.status_code == 200 and row("zz_guest1")["active"] is True, login_ok.status_code)
+        set_verified_ago("zz_guest1", minutes=1)
+        changed = copy.deepcopy(_gt._data)
+        changed["account_types"]["guest"]["allowed_requests"] = ["GET /api/id", "GET /api/user"]
+        with patch.object(_gt, "_data", changed):
+            with app.test_client() as c:
+                login(c, "zz_guest1")
+                check("what a guest may do comes from the data: with the list changed, GET /api/user (200) is allowed and commenting (403) is not",
+                      c.get("/api/user").status_code == 200 and c.post("/api/microblog/reply", json={"postId": post_id, "content": "x"}).status_code == 403)
+
+        def refused(mutate):
+            bad = copy.deepcopy(_gt._data)
+            mutate(bad)
+            try:
+                _gt._check(bad)
+                return False
+            except ValueError:
+                return True
+        guest = lambda d: d["account_types"]["guest"]
+        check("startup refuses a type that skips the GitHub check but has no list of allowed requests", refused(lambda d: guest(d).pop("allowed_requests")))
+        check("startup refuses a type that skips the GitHub check without a Guest Window", refused(lambda d: guest(d).update(requires_open_window=False)) and refused(lambda d: guest(d).pop("requires_open_window")))
+        check("startup refuses an empty list of allowed requests", refused(lambda d: guest(d).update(allowed_requests=[])))
+        check("startup refuses a public type whose role is an Admin or Teacher role",
+              refused(lambda d: guest(d).update(role="Teacher")) and refused(lambda d: guest(d).update(role=d["admin_role"])))
+        check("startup refuses an allowed request that is not written as METHOD /path", refused(lambda d: guest(d).update(allowed_requests=["/api/id"])))
+        check("startup refuses a lifetime, a window maximum or a request limit that is not a positive whole number",
+              all(refused(lambda d, k=k, v=v: guest(d).update({k: v})) for k in ("lifetime_hours", "window_max_minutes", "requests_per_minute") for v in (0, "3", True)))
+        check("startup refuses flags that are not true or false",
+              refused(lambda d: guest(d).update(github_check="false")) and refused(lambda d: guest(d).update(active_on_signup="yes")) and refused(lambda d: guest(d).update(requires_open_window="yes")))
+        check("startup refuses two account types that share a role", refused(lambda d: guest(d).update(role="User")))
+    app.logger.removeHandler(audit)
 
     # update() cannot self-activate
     with app.app_context():

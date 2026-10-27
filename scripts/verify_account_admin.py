@@ -297,6 +297,9 @@ def main():
         login_api(c, "zz_teacher")
         r = c.post("/api/user/zz_r_student/role", json={"role": "Mentor"})
         check("a Teacher can change a student to a mentor (200)", r.status_code == 200 and role_of("zz_r_student") == "Mentor", r.status_code)
+        r = c.post("/api/user/zz_r_student/role", json={"role": "Guest"})
+        check("a Teacher cannot turn an existing account into a Guest (400): that role is for sign-up only",
+              r.status_code == 400 and role_of("zz_r_student") != "Guest", f"{r.status_code} {role_of('zz_r_student')}")
         check("... and to a teacher, and back to a student",
               c.post("/api/user/zz_r_student/role", json={"role": "Teacher"}).status_code == 200
               and c.post("/api/user/zz_r_student/role", json={"role": "User"}).status_code == 200 and role_of("zz_r_student") == "User")
