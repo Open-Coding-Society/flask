@@ -136,7 +136,8 @@ class UserAPI:
                     # Simulate a POST request to the single user creation endpoint
                     response = client.post('/api/user', json=user)
                     
-                    if response.status_code != 200:  # Assuming success status code is 200
+                    # 409 means the user already exists; still apply their sections below
+                    if response.status_code not in (200, 409):
                         results['errors'].append(response.get_json())
                         continue
                 
@@ -244,11 +245,9 @@ class UserAPI:
                 #print(f"User type: {type(user)}")
                 
                 if not user:
-                    # Check if user was actually created in database despite create() returning None
-                    db_user = User.query.filter_by(_uid=uid).first()
-                    if db_user:
-                        #print(f"User exists in DB but create returned None: {db_user.uid}")
-                        return jsonify(_without_password(db_user.read()))  # Return the user anyway
+                    # create() failed on a duplicate uid: it belongs to someone else, so never hand back their profile
+                    if User.query.filter_by(_uid=uid).first():
+                        return {'message': f'User ID {uid} is already taken'}, 409
                     else:
                         return {'message': f'Processed {name}, either a format error or User ID {uid} is duplicate'}, 400
 
@@ -831,10 +830,9 @@ class UserAPI:
                 user = user_obj.create(cleaned_body)
 
                 if not user:
-                    # Check if user was actually created in database
-                    db_user = User.query.filter_by(_uid=uid).first()
-                    if db_user:
-                        return jsonify(_without_password(db_user.read()))
+                    # Same as regular signup: a taken username gets a 409, not that user's profile
+                    if User.query.filter_by(_uid=uid).first():
+                        return {'message': f'Username {uid} is already taken'}, 409
                     else:
                         return {'message': f'Failed to create guest account for {uid}, username may already exist'}, 400
 
