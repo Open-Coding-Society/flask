@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from __init__ import app, db
 from api.authorize import token_required
 from model.user import User, meets_password_rule, WeakPasswordError
-from model import account_types
+from model import account_types, guest_window
 from model.google_token import verified_google_email
 from model.github import GitHubUser
 import os
@@ -85,15 +85,6 @@ def _consume_reset_token(uid, token):
 
         _consumed_reset_tokens[token] = exp
         return True
-
-
-def _staff_caller():
-    """The logged-in, active Teacher or Admin making this request, or None. It asks the same
-    token_required check every staff endpoint uses, so an inactive account, a stale or garbage
-    login, and a role that is not in staff_roles all come back as None."""
-    probe = token_required(account_types.staff_roles())(lambda: g.current_user)
-    caller = probe()
-    return caller if isinstance(caller, User) else None
 
 
 def _without_password(user_data):
@@ -191,13 +182,13 @@ class UserAPI:
             # token; a type that is active on sign-up (a guest) is activated at once; any other
             # type stays inactive until a Teacher/Admin verifies it.
             account_type = account_types.get(body.get('accountType'))
+            if account_types.requires_open_window(account_type) and not guest_window.is_open():
+                return {'message': 'Guest sign-up is closed right now. Ask a teacher to open the Guest Window.'}, 403
             if body.get('password') is None and not account_types.needs_github_check(account_type):
                 return {'message': 'A password is required'}, 400
 
-            # check if uid is a GitHub account, unless the account type does not need one. A
-            # logged-in Teacher or Admin may also create accounts that are not.
-            staff = _staff_caller()
-            if staff is None and account_types.needs_github_check(account_type):
+            # check if uid is a GitHub account, unless the account type does not need one
+            if account_types.needs_github_check(account_type):
                 _, status = GitHubUser().get(uid)
                 if status != 200:
                     return {'message': f'User ID {uid} not a valid GitHub account' }, 404
@@ -243,11 +234,6 @@ class UserAPI:
 
             #2: Save the User object to the database using custom create method
             try:
-                # An account whose lifetime has passed (a guest) no longer holds its uid. This is
-                # after the request is validated, so a refused sign-up removes nothing.
-                taken = User.query.filter_by(_uid=uid).first()
-                if taken is not None and taken.expired():
-                    taken.delete()
                 user = user_obj.create(cleaned_body) # pass the cleaned body elements to be saved in the database
                 #print(f"Create method returned: {user}")
                 #print(f"User type: {type(user)}")
@@ -258,7 +244,7 @@ class UserAPI:
                     if db_user:
                         if not account_types.needs_github_check(account_type):
                             # an open sign-up (a guest): say it is taken, and show nothing about the account
-                            return {'message': f'User ID {uid} already exists'}, 409
+                            return {'message': f'User ID {uid} already exists. Log in with it to come back.'}, 409
                         #print(f"User exists in DB but create returned None: {db_user.uid}")
                         return jsonify(_without_password(db_user.read()))  # Return the user anyway
                     else:
@@ -266,9 +252,6 @@ class UserAPI:
 
                 if verified_email or account_types.active_on_signup(account_type):
                     user.activate()
-                if staff is not None and account_types.needs_github_check(account_type):
-                    # %r quotes the uid, so a newline in it cannot forge a second log line
-                    current_app.logger.info("AUDIT signup uid=%r created by staff uid=%r without a GitHub check", user.uid, staff.uid)
 
                 #print(f"Successfully created user: {user.uid}")
                 # return response, the created user details as a JSON object
@@ -510,7 +493,12 @@ class UserAPI:
                     return {'message': f"Invalid user id or password"}, 401
 
                 if user.expired():
-                    return {'message': 'This account has expired'}, 403
+                    # A guest whose time has passed comes back only while the Guest Window is open
+                    if not account_types.role_requires_open_window(user.role):
+                        return {'message': 'This account has expired'}, 403
+                    if not guest_window.is_open():
+                        return {'message': 'This account has expired, and the Guest Window is closed. Ask a teacher to open it.'}, 403
+                    user.activate()
                             
                 # Check if user is found
                 if user:
@@ -987,6 +975,47 @@ class UserAPI:
             return jsonify(_without_password(user.read()))
 
     # building RESTapi endpoint
+    class _GuestWindow(Resource):
+        """The Guest Window (see model/guest_window.py). Anyone can ask whether it is open. A
+        Teacher/Admin opens it with {"minutes": N}, N up to window_max_minutes in
+        model/account_types.json, and can close it at any time."""
+        def get(self):
+            closes = guest_window.closes_at()
+            return {'open': closes is not None, 'closes_at': None if closes is None else closes.isoformat()}
+
+        @token_required(account_types.staff_roles())
+        def post(self):
+            body = request.get_json(silent=True)
+            minutes = body.get('minutes') if isinstance(body, dict) else None
+            longest = account_types.window_max_minutes()
+            if not isinstance(minutes, int) or isinstance(minutes, bool) or not 1 <= minutes <= longest:
+                return {'message': f'minutes must be a whole number from 1 to {longest}'}, 400
+            closes = guest_window.open_for(minutes)
+            # %r quotes the uid, so a newline in it cannot forge a second log line
+            current_app.logger.info("AUDIT guest window opened by uid=%r for %d minutes", g.current_user.uid, minutes)
+            return {'open': True, 'closes_at': closes.isoformat()}
+
+        @token_required(account_types.staff_roles())
+        def delete(self):
+            guest_window.close()
+            current_app.logger.info("AUDIT guest window closed by uid=%r", g.current_user.uid)
+            return {'open': False, 'closes_at': None}
+
+    class _GuestDisable(Resource):
+        """Teacher/Admin turns guest access off at once: closes the Guest Window and makes every
+        active guest inactive, so each is refused from their next request. The records are kept,
+        and a guest can come back in a later window."""
+        @token_required(account_types.staff_roles())
+        def post(self):
+            guest_window.close()
+            guests = User.query.filter(User._role.in_(account_types.guest_roles()), User.active.is_(True)).all()
+            for guest in guests:
+                guest.active = False
+                guest.last_verified = None  # so coming back counts as returning after the time has passed
+            db.session.commit()
+            current_app.logger.info("AUDIT guest access disabled by uid=%r, %d guest accounts made inactive", g.current_user.uid, len(guests))
+            return {'open': False, 'closes_at': None, 'disabled': len(guests)}
+
     api.add_resource(_ID, '/id')
     api.add_resource(_BULK, '/users')
     api.add_resource(_CRUD, '/user')
@@ -1002,6 +1031,8 @@ class UserAPI:
     api.add_resource(_ChangeRole, '/user/<string:uid>/role')
     api.add_resource(_Reverify, '/user/reverify')
     api.add_resource(_AdminCreate, '/user/admin-create')
+    api.add_resource(_GuestWindow, '/guest/window')
+    api.add_resource(_GuestDisable, '/guest/disable')
     
     class _Class(Resource):
         """Manage the user's `class` list (e.g. CSSE, CSP, CSA).

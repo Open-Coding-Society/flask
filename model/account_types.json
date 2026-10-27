@@ -25,6 +25,9 @@
       "github_check": false,
       "active_on_signup": true,
       "lifetime_hours": 3,
+      "requires_open_window": true,
+      "window_max_minutes": 180,
+      "requests_per_minute": 60,
       "allowed_requests": [
         "GET /",
         "GET /api/id",
@@ -34,7 +37,9 @@
         "GET /logout",
         "DELETE /api/authenticate",
         "GET /api/microblog",
-        "POST /api/microblog/reply"
+        "POST /api/microblog/reply",
+        "POST /api/microblog/reaction",
+        "DELETE /api/microblog/reaction"
       ]
     }
   }

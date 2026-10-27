@@ -13,6 +13,7 @@ from model.persona import Persona, initPersonas, initPersonaUsers
 from model.presence_schedule import seed_schedules
 # API endpoints
 from api.user import user_api 
+from api.authorize import throttled
 from api.python_exec_api import python_exec_api
 from api.javascript_exec_api import javascript_exec_api
 from api.section import section_api
@@ -39,7 +40,7 @@ from api.presence_api import presence_api
 
 # database Initialization functions
 from model.user import User, initUsers
-from model import account_types
+from model import account_types, guest_window
 from model.user import Section;
 from model.github import GitHubUser
 from model.feedback import Feedback
@@ -135,12 +136,15 @@ def load_user(user_id):
 
 @app.before_request
 def limit_session_accounts():
-    """An account type limited to a list of requests (a guest) is held to it on Flask's own
-    pages and login session too, not only through the API's token check."""
+    """An account type limited to a list of requests (a guest), and to a number of them a minute,
+    is held to that on Flask's own pages and login session too, not only through the API's token
+    check."""
     if request.method == 'OPTIONS' or not current_user.is_authenticated:
         return None
     if not account_types.request_allowed(current_user.role, request.method, request.path):
         return jsonify({'message': 'This type of account is not allowed to do that.'}), 403
+    if throttled(current_user):
+        return jsonify({'message': 'Too many requests. Wait a minute.'}), 429, {'Retry-After': '60'}
     return None
 
 @app.context_processor
@@ -204,8 +208,14 @@ def index():
 @app.route('/users/table2')
 @login_required
 def u2table():
+    for guest in User.query.filter(User._role.in_(account_types.guest_roles()), User.active.is_(True)):
+        if guest.expired():
+            guest.deactivate()  # a guest whose time has passed is shown as inactive, its record kept
     users = User.query.all()
-    return render_template("u2table.html", user_data=users, role_options=current_user.grantable_roles())
+    window_closes = guest_window.closes_at()
+    return render_template("u2table.html", user_data=users, role_options=current_user.grantable_roles(),
+                           guest_window_closes=None if window_closes is None else window_closes.isoformat() + "Z",
+                           guest_window_max=account_types.window_max_minutes())
 
 @app.route('/sections/')
 @login_required

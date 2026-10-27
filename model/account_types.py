@@ -15,7 +15,13 @@ Each account type has:
                            at sign-up. A type that turns it off must have allowed_requests, and its
                            role cannot be an admin or staff role.
   active_on_signup         optional, false by default. The account is active as soon as it is created.
-  lifetime_hours           optional. The account is refused this many hours after it was activated.
+  lifetime_hours           optional. The account is refused this many hours after it was activated,
+                           and made inactive. Its record is kept.
+  requires_open_window     optional, false by default. The account can be created, or come back after
+                           its lifetime, only while a Teacher or Admin has the Guest Window open
+                           (see model/guest_window.py). A type that skips the GitHub check needs it.
+  window_max_minutes       how long the Guest Window can be opened for. Needed with requires_open_window.
+  requests_per_minute      optional. The most requests one account of this type can make in a minute.
   allowed_requests         optional. When present the account can only make these requests, written
                            "METHOD /path" (for example "GET /api/id"), and is refused everything else.
 verification_interval_days is how long a verification stays current, and the most a Teacher/Admin
@@ -54,12 +60,17 @@ def _check(data):
                 raise ValueError(f"account_types.json: {name} skips the GitHub check, so it needs allowed_requests")
             if account_type["role"] in privileged:
                 raise ValueError(f"account_types.json: {name} skips the GitHub check, so its role cannot be a staff role")
-        for flag in ("github_check", "active_on_signup"):
+            if account_type.get("requires_open_window") is not True:
+                raise ValueError(f"account_types.json: {name} skips the GitHub check, so it needs requires_open_window")
+        for flag in ("github_check", "active_on_signup", "requires_open_window"):
             if flag in account_type and not isinstance(account_type[flag], bool):
                 raise ValueError(f"account_types.json: {name}.{flag} must be true or false")
-        hours = account_type.get("lifetime_hours")
-        if hours is not None and (not isinstance(hours, int) or isinstance(hours, bool) or hours < 1):
-            raise ValueError(f"account_types.json: {name}.lifetime_hours must be a whole number of hours, 1 or more")
+        for key in ("lifetime_hours", "window_max_minutes", "requests_per_minute"):
+            number = account_type.get(key)
+            if key in account_type and (not isinstance(number, int) or isinstance(number, bool) or number < 1):
+                raise ValueError(f"account_types.json: {name}.{key} must be a whole number, 1 or more")
+        if account_type.get("requires_open_window") and "window_max_minutes" not in account_type:
+            raise ValueError(f"account_types.json: {name} needs window_max_minutes")
 
 
 def _read():
@@ -173,3 +184,29 @@ def request_allowed(role, method, path):
     allowed = allowed_requests(role)
     return allowed is None or f"{method} {path.rstrip('/') or '/'}" in allowed
 
+
+
+def requires_open_window(account_type):
+    """Whether accounts of this type can be created, or come back, only during the Guest Window."""
+    return bool(account_type.get("requires_open_window", False))
+
+
+def role_requires_open_window(role):
+    account_type = _type_for_role(role)
+    return account_type is not None and requires_open_window(account_type)
+
+
+def guest_roles():
+    """The roles of the account types that need the Guest Window."""
+    return tuple(t["role"] for t in _data["account_types"].values() if requires_open_window(t))
+
+
+def window_max_minutes():
+    """The longest the Guest Window can be opened for."""
+    return max((t["window_max_minutes"] for t in _data["account_types"].values() if requires_open_window(t)), default=0)
+
+
+def requests_per_minute(role):
+    """The most requests one account of this role can make in a minute, or None for no limit."""
+    account_type = _type_for_role(role)
+    return account_type.get("requests_per_minute") if account_type else None
