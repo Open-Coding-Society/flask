@@ -443,6 +443,17 @@ def main():
     check("the numbers and the exempt roles come from the data: default 7 days, Mentor exempt, Teacher no longer exempt",
           seven and mentor_exempt and teacher_lapses, f"{seven} {mentor_exempt} {teacher_lapses}")
 
+    # bulk import is for the admin role only, and the role is read from the data
+    with app.test_client() as c:
+        check("bulk import: nobody logged in is refused (401)", c.post("/api/users", json=[]).status_code == 401)
+    with app.test_client() as c:
+        login_api(c, "zz_teacher")
+        check("bulk import: a Teacher is refused (403)", c.post("/api/users", json=[]).status_code == 403)
+    with app.test_client() as c:
+        login_api(c, "zz_admin")
+        r = c.post("/api/users", json={})
+        check("bulk import: an Admin gets as far as the request being checked (400, not a list)", r.status_code == 400, r.status_code)
+
     # the table asks the user who they are (is_admin, is_teacher); it does not name roles itself
     with open(os.path.join(REPO, "templates", "u2table.html"), encoding="utf-8") as fh:
         named = re.findall(r"""['"](?:Admin|Teacher|Mentor|User)['"]""", fh.read())
