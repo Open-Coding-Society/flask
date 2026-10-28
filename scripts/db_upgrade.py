@@ -110,7 +110,7 @@ def add_column_sql(table, col, fill=None):
     if col.primary_key:
         return None, "it is a primary key"
     if col.unique or any(idx.unique and col.name in idx.columns for idx in table.indexes):
-        return None, "it is unique, and existing rows would all share one value"
+        return None, "it is unique, which SQLite cannot add to an existing table"
     if col.foreign_keys:
         return None, "it is a foreign key"
     try:
@@ -254,24 +254,45 @@ def main():
 
         existing = sorted(set(db.metadata.tables) - set(to_create))
         before = row_counts(existing)
-        with db.engine.begin() as conn:
-            for sql in statements:
-                conn.execute(sa.text(sql))
-            for (t, c), value in fills.items():
-                column = db.metadata.tables[t].columns[c]
-                conn.execute(sa.update(column.table).values({c: value}))
+        steps = [(sql, sa.text(sql)) for sql in statements]
+        steps += [(f"UPDATE {t} SET {c} = {value!r}", sa.update(db.metadata.tables[t]).values({c: value}))
+                  for (t, c), value in fills.items()]
+        done = []
+        try:
+            # One transaction per step: MySQL commits each ALTER on its own anyway, so this
+            # keeps the list of what ran honest on both databases.
+            for label, step in steps:
+                with db.engine.begin() as conn:
+                    conn.execute(step)
+                done.append(label)
+        except Exception as e:
+            print(f"\nFAILED on: {steps[len(done)][0]}\n  {e}")
+            print("Already applied:" + "".join(f"\n  {label}" for label in done) if done else "Nothing was applied.")
+            print("Restore from the rollback point above, or fix the cause and run again"
+                  " (columns already added are skipped).")
+            return 1
         db.create_all()
         after = row_counts(existing)
 
         still_to_create, still_missing = compare()[:2]
         changed = {t: (before[t], after[t]) for t in existing if before[t] != after[t]}
+        nulls = {}
+        with db.engine.connect() as conn:
+            for t, cols in plan.items():
+                for c, _, _ in cols:
+                    column = db.metadata.tables[t].columns[c]
+                    if not column.nullable and c not in still_missing.get(t, []):
+                        n = conn.execute(sa.select(sa.func.count()).where(column.is_(None))).scalar()
+                        if n:
+                            nulls[f"{t}.{c}"] = n
         if to_create:
             print(f"\nCreated: {', '.join(t for t in to_create if t not in still_to_create)}")
         if statements:
             print(f"Added {len(statements)} column(s).")
-        if still_to_create or still_missing or changed:
+        if still_to_create or still_missing or changed or nulls:
             print(f"FAILED. Not created: {still_to_create or 'none'}. Columns still missing: "
-                  f"{still_missing or 'none'}. Row counts changed: {changed or 'none'}")
+                  f"{still_missing or 'none'}. Row counts changed: {changed or 'none'}. "
+                  f"NULLs in NOT NULL columns: {nulls or 'none'}")
             return 1
         print(f"All {len(existing)} existing tables kept their row counts ({sum(after.values())} rows).")
         print("Upgrade complete.")
