@@ -7,8 +7,12 @@ Compares the models against the live database, then:
 - adds columns the models have and an existing table does not (ALTER TABLE ... ADD
   COLUMN), when existing rows can be given a value: the column allows NULL, or it has a
   fixed default. Existing rows get NULL or that default.
+- --fill table.column=value gives existing rows a different value than new rows get,
+  e.g. --fill users.active=1 keeps current accounts active while new ones start
+  inactive. It also lets a NOT NULL column with no fixed default be added.
 - REFUSES, changing nothing, when a missing column is a primary key, unique, a foreign
-  key, or NOT NULL with no fixed default. Those need the full db_init.py + restore workflow.
+  key, or NOT NULL with no fixed default and no --fill. Those need the full
+  db_init.py + restore workflow.
 - leaves tables and columns the models no longer use in place, and lists them.
 
 No row is deleted or rewritten. Every pre-existing table is re-counted afterwards
@@ -23,6 +27,7 @@ Usage (from the flask repo root):
   python scripts/db_upgrade.py --check                   # report only, change nothing
   python scripts/db_upgrade.py                           # backup, then upgrade
   python scripts/db_upgrade.py --backup-file instance/backups/<dump>.sql
+  python scripts/db_upgrade.py --fill users.active=1     # existing rows get 1
 
 Exit: 0 up to date or upgraded, 1 refused or failed, 2 (--check) changes to make.
 """
@@ -71,16 +76,35 @@ def fixed_default(col, dialect):
     if col.default is not None:
         if not col.default.is_scalar:
             return None  # a Python function: new rows only, existing rows get NULL
-        try:
-            return sa.literal(col.default.arg, col.type).compile(
-                dialect=dialect, compile_kwargs={'literal_binds': True}).string
-        except Exception as e:
-            raise ValueError(f"its default {col.default.arg!r} can't be written as SQL ({e})")
+        return sql_literal(col.default.arg, col, dialect)
     return None
 
 
-def add_column_sql(table, col):
-    """(ALTER TABLE statement, None) when the column can be added in place, else (None, reason)."""
+def parse_fill(col, text):
+    """The Python value for --fill, read as the column's type."""
+    kind = col.type.python_type
+    if kind is bool:
+        if text.lower() not in ('1', '0', 'true', 'false'):
+            raise ValueError("must be 1, 0, true or false")
+        return text.lower() in ('1', 'true')
+    if kind is datetime:
+        return datetime.fromisoformat(text)
+    return kind(text)
+
+
+def sql_literal(value, col, dialect):
+    try:
+        return sa.literal(value, col.type).compile(dialect=dialect, compile_kwargs={'literal_binds': True}).string
+    except Exception as e:
+        raise ValueError(f"{value!r} can't be written as SQL ({e})")
+
+
+def add_column_sql(table, col, fill=None):
+    """(ALTER TABLE statement, None) when the column can be added in place, else (None, reason).
+
+    fill is the --fill value, or None. Without one, existing rows get the column's fixed
+    default or NULL. With one, a NOT NULL column with no fixed default takes it as its
+    default; otherwise it is set by an UPDATE after the ALTER."""
     dialect = db.engine.dialect
     q = dialect.identifier_preparer.quote
     if col.primary_key:
@@ -95,7 +119,13 @@ def add_column_sql(table, col):
     except Exception as e:
         return None, str(e)
     if default is None and not col.nullable:
-        return None, "it is NOT NULL with no fixed default, so existing rows would have no value"
+        if fill is None:
+            return None, ("it is NOT NULL with no fixed default, so existing rows would have no value"
+                          f" (give them one with --fill {table.name}.{col.name}=VALUE)")
+        try:
+            default = sql_literal(fill, col, dialect)
+        except ValueError as e:
+            return None, str(e)
     if default is not None and dialect.name == 'mysql' and col_type.upper().split('(')[0] in ('TEXT', 'MEDIUMTEXT', 'LONGTEXT', 'BLOB', 'JSON'):
         default = f"({default})"  # MySQL takes a default on these types only as an expression
     sql = f"ALTER TABLE {q(table.name)} ADD COLUMN {q(col.name)} {col_type}"
@@ -105,11 +135,28 @@ def add_column_sql(table, col):
     return sql, None
 
 
-def plan_columns(missing):
+def plan_columns(missing, fills):
     """{table: [(column, sql, reason)]} for every missing column."""
     tables = db.metadata.tables
-    return {t: [(c, *add_column_sql(tables[t], tables[t].columns[c])) for c in cols]
+    return {t: [(c, *add_column_sql(tables[t], tables[t].columns[c], fills.get((t, c)))) for c in cols]
             for t, cols in missing.items()}
+
+
+def read_fills(args_fill, missing):
+    """{(table, column): value} from --fill, or raise ValueError. Only columns being added."""
+    fills = {}
+    for item in args_fill or []:
+        target, sep, text = item.partition('=')
+        table, dot, column = target.partition('.')
+        if not sep or not dot:
+            raise ValueError(f"--fill {item}: use table.column=value")
+        if column not in missing.get(table, []):
+            raise ValueError(f"--fill {item}: {table}.{column} is not a column being added")
+        try:
+            fills[(table, column)] = parse_fill(db.metadata.tables[table].columns[column], text)
+        except Exception as e:
+            raise ValueError(f"--fill {item}: {e}")
+    return fills
 
 
 def row_counts(tables):
@@ -164,12 +211,21 @@ def main():
     parser = argparse.ArgumentParser(description="Create missing tables and columns without dropping anything.")
     parser.add_argument('--check', action='store_true', help="report only, change nothing")
     parser.add_argument('--backup-file', help="a backup you already took (required where mysqldump is unavailable)")
+    parser.add_argument('--fill', action='append', metavar='TABLE.COLUMN=VALUE',
+                        help="value for existing rows in a column being added (repeatable)")
     args = parser.parse_args()
 
     with app.app_context():
         to_create, missing, unused_tables, unused_cols = compare()
-        plan = plan_columns(missing)
+        try:
+            fills = read_fills(args.fill, missing)
+        except ValueError as e:
+            print(f"Refusing: {e}. Nothing was changed.")
+            return 1
+        plan = plan_columns(missing, fills)
         report(to_create, plan, unused_tables, unused_cols)
+        for (t, c), value in fills.items():
+            print(f"Existing rows:     {t}.{c} = {value!r}")
         statements = [sql for cols in plan.values() for _, sql, _ in cols if sql]
         refused = [f"{t}.{c}" for t, cols in plan.items() for c, sql, _ in cols if not sql]
 
@@ -201,6 +257,9 @@ def main():
         with db.engine.begin() as conn:
             for sql in statements:
                 conn.execute(sa.text(sql))
+            for (t, c), value in fills.items():
+                column = db.metadata.tables[t].columns[c]
+                conn.execute(sa.update(column.table).values({c: value}))
         db.create_all()
         after = row_counts(existing)
 
