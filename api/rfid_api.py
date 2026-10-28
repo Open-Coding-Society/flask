@@ -7,13 +7,19 @@ and authenticates with the shared device key (X-API-Key = RFID_API_KEY),
 since the device has no OCS login of its own. Tag management and the event
 list use the normal OCS login (Admin/Teacher).
 
+Self-registration: any logged-in person can open a short claim for a room's
+reader (POST /claims) and then tap their new card there; the scan handler
+links it to them (claim_unregistered_tag in api/presence_api.py). Replacing
+or removing a card stays with staff (/tags).
+
 Every response under /api/rfid is JSON, errors included.
 Requests and expected results: api/presence.http.
 """
 
 import uuid
+from datetime import timedelta
 
-from flask import Blueprint, request
+from flask import Blueprint, g, request
 
 from __init__ import db
 from api.authorize import token_required
@@ -21,7 +27,7 @@ from api.presence_api import (STAFF, PresenceError, PresenceResource, get_room, 
                               json_not_found, record_event, require_device_api_key)
 from flask_restful import Api
 from model.presence import PresenceEvent, to_iso_z, utc_now
-from model.rfid_tag import RfidTag
+from model.rfid_tag import RfidCardClaim, RfidTag
 from model.user import User
 
 rfid_api = Blueprint('rfid_api', __name__, url_prefix='/api/rfid')
@@ -99,10 +105,68 @@ class RfidAPI:
                       .order_by(PresenceEvent._occurred_at.desc()).limit(200).all())
             return [e.to_dict() for e in events]
 
+    class _MyCards(PresenceResource):
+        @token_required()
+        def get(self):
+            """The logged-in person's card(s), shown by their last 4 digits, and
+            their most recent claim."""
+            user, now = g.current_user, utc_now()
+            cards = RfidTag.query.filter_by(_user_id=user.id).all()
+            claim = (RfidCardClaim.query.filter_by(_user_id=user.id)
+                     .order_by(RfidCardClaim.id.desc()).first())
+            return {
+                "uid": user.uid,
+                "cards": [{"card_ending": t.tag_uid[-4:],
+                           "registered_at": to_iso_z(t.created_at) if t.created_at else None} for t in cards],
+                "claim": claim.to_dict(now) if claim else None,
+            }
+
+    class _Claims(PresenceResource):
+        @token_required()
+        def post(self):
+            """Opens a WINDOW_SECONDS window to register your own card at a
+            room's reader: {room_id}. One card per person; a second card or a
+            replacement goes through staff."""
+            user, now = g.current_user, utc_now()
+            room = get_room(json_body().get("room_id"))
+            if RfidTag.query.filter_by(_user_id=user.id).first():
+                raise PresenceError("you already have a registered card; ask a teacher to replace or remove it",
+                                    409, status="has_card")
+            RfidCardClaim.query.filter_by(_user_id=user.id, _status="open").update({"_status": "cancelled"})
+            claim = RfidCardClaim(user_id=user.id, room_id=room.id, created_at=now,
+                                  expires_at=now + timedelta(seconds=RfidCardClaim.WINDOW_SECONDS))
+            db.session.add(claim)
+            db.session.commit()
+            return claim.to_dict(now), 201
+
+    class _Claim(PresenceResource):
+        def _own(self, claim_id):
+            claim = RfidCardClaim.query.get(claim_id)
+            if not claim:
+                raise PresenceError(f"no claim {claim_id}", 404)
+            if claim.user_id != g.current_user.id and g.current_user.role not in STAFF:
+                raise PresenceError("that claim belongs to someone else", 403)
+            return claim
+
+        @token_required()
+        def get(self, claim_id):
+            return self._own(claim_id).to_dict(utc_now())
+
+        @token_required()
+        def delete(self, claim_id):
+            claim = self._own(claim_id)
+            if claim.status == "open":
+                claim.status = "cancelled"
+                db.session.commit()
+            return claim.to_dict(utc_now())
+
     api.add_resource(_Scan, '/scan')
     api.add_resource(_Tags, '/tags')
     api.add_resource(_Tag, '/tags/<string:tag_uid>')
     api.add_resource(_RoomEvents, '/rooms/<int:room_id>/events')
+    api.add_resource(_MyCards, '/cards/me')
+    api.add_resource(_Claims, '/claims')
+    api.add_resource(_Claim, '/claims/<int:claim_id>')
 
 
 json_not_found(rfid_api)

@@ -161,6 +161,13 @@ requests prompt for the `RFID_API_KEY`; keep it out of the file. A fresh
 database needs `db.create_all()` (or `./scripts/db_init.py` locally), and
 `seed_schedules()` loads the starter schedule from `model/presence_schedules.json`.
 
+People can register their own card (steps 22-26): a logged-in user opens a
+60-second claim for a room's reader (`POST /api/rfid/claims`), then taps a new
+card there, and the scan links it to them. If two people are registering at the
+same reader at once, nobody gets the card and both try again, so a card is never
+linked to the wrong person. Self-service is one card per person; replacing or
+removing a card stays with Teachers and Admins (`/api/rfid/tags`).
+
 #### Manual user CRUD sequence
 
 Open [api/user_crud.http](api/user_crud.http) and set `testUid` to a disposable,
@@ -373,7 +380,8 @@ The presence system's tables travel together as one `presence` bundle
 `presence_schedule_overrides`, `presence_rooms` (with `presence_room_members`),
 `rfid_tags`, `presence_periods`, `presence_events`, and `camera_checks`. Rows are matched
 by uid, room and schedule name, and event id, so a rebuild with new ids keeps every
-tag, period, and tap.
+tag, period, and tap. `rfid_card_claims` is deliberately not migrated: a claim lives
+for 60 seconds (see below), so there is nothing to keep across a rebuild.
 
 **Adding a new model?** It must be added in three places or its data is lost on the next
 migration: `MIGRATED_MODELS` plus export/import endpoints in
