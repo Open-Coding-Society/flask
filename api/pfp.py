@@ -1,6 +1,7 @@
 from flask import Blueprint, g, request
 from flask_restful import Api, Resource
 from api.authorize import token_required
+from model import account_types
 from model.user import User
 from model.pfp import pfp_base64_decode, pfp_base64_upload, pfp_file_delete
 
@@ -65,7 +66,7 @@ class _PFP(Resource):
         """
         current_user = g.current_user
 
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Unauthorized.'}, 401
 
         user_uid = request.args.get('uid')

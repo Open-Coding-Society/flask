@@ -31,7 +31,7 @@
                 <td>
                     <button class="btn btn-info btn-sm view-btn" data-id="{{ persona.id }}">View</button>
                     <button class="btn btn-primary btn-sm edit-btn" data-id="{{ persona.id }}">Edit</button>
-                    {% if current_user.role == 'Admin' %}
+                    {% if current_user.is_admin() %}
                     <button class="btn btn-danger btn-sm delete-btn" data-id="{{ persona.id }}">Delete</button>
                     {% endif %}
                 </td>
@@ -41,7 +41,7 @@
     </table>
 
     <!-- Add New Persona Button -->
-    {% if current_user.role == 'Admin' %}
+    {% if current_user.is_admin() %}
     <button class="btn btn-success" id="addPersonaBtn">Add New Persona</button>
     {% endif %}
 </div>

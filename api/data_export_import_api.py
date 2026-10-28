@@ -7,6 +7,7 @@ Used by db_migrate and db_restore scripts for database migration.
 from flask import Blueprint, request, jsonify, g
 from flask_restful import Api, Resource
 from api.authorize import token_required
+from model import account_types
 from __init__ import db
 
 # Import all models
@@ -75,7 +76,7 @@ class ExportCounts(Resource):
     @token_required()
     def get(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
 
         counts = {}
@@ -121,7 +122,7 @@ class ExportAllData(Resource):
         current_user = g.current_user
 
         # Only allow admins to export all data
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required to export data'}, 403
 
         try:
@@ -307,7 +308,7 @@ class ImportAllData(Resource):
         current_user = g.current_user
 
         # Only allow admins to import data
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required to import data'}, 403
 
         data = request.get_json()
@@ -845,7 +846,7 @@ class ExportSections(Resource):
     @token_required()
     def get(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         sections = Section.query.all()
         return jsonify({'sections': [s.read() for s in sections], 'count': len(sections)})
@@ -854,7 +855,7 @@ class ExportUsers(Resource):
     @token_required()
     def get(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
 
         # Always use pagination to prevent timeouts
@@ -887,7 +888,7 @@ class ExportTopics(Resource):
     @token_required()
     def get(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
 
         # Always use pagination to prevent timeouts
@@ -910,7 +911,7 @@ class ExportMicroblogs(Resource):
     @token_required()
     def get(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
 
         # Always use pagination to prevent timeouts
@@ -942,7 +943,7 @@ class ExportPosts(Resource):
     @token_required()
     def get(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
 
         # Always use pagination to prevent timeouts
@@ -972,7 +973,7 @@ class ExportClassrooms(Resource):
     @token_required()
     def get(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         classrooms = Classroom.query.all()
         result = []
@@ -989,7 +990,7 @@ class ExportFeedback(Resource):
     @token_required()
     def get(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         feedback_items = Feedback.query.all()
         return jsonify({'feedback': [f.read() for f in feedback_items], 'count': len(feedback_items)})
@@ -998,7 +999,7 @@ class ExportStudy(Resource):
     @token_required()
     def get(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         study_records = Study.query.all()
         result = []
@@ -1015,7 +1016,7 @@ class ExportPersonas(Resource):
     @token_required()
     def get(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
 
         # Always use pagination to prevent timeouts
@@ -1038,7 +1039,7 @@ class ExportUserPersonas(Resource):
     @token_required()
     def get(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
 
         # Always use pagination to prevent timeouts
@@ -1098,7 +1099,7 @@ class ExportLeaderboard(Resource):
     """Export the SCORE_COUNTER leaderboard events ('leaderboard' table)."""
     @token_required()
     def get(self):
-        if g.current_user.role != 'Admin':
+        if g.current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         return _export_events(ScoreCounterEvent, 'leaderboard')
 
@@ -1107,7 +1108,7 @@ class ExportElementaryLeaderboard(Resource):
     """Export the elementary leaderboard events."""
     @token_required()
     def get(self):
-        if g.current_user.role != 'Admin':
+        if g.current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         return _export_events(ElementaryLeaderboardEvent, 'elementary_leaderboard')
 
@@ -1116,7 +1117,7 @@ class ExportSkillSnapshots(Resource):
     """Export skill snapshots."""
     @token_required()
     def get(self):
-        if g.current_user.role != 'Admin':
+        if g.current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
 
         page = request.args.get('page', 1, type=int)
@@ -1151,7 +1152,7 @@ class ImportSections(Resource):
     @token_required()
     def post(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         
         data = request.get_json()
@@ -1171,7 +1172,7 @@ class ImportUsers(Resource):
     @token_required()
     def post(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         
         data = request.get_json()
@@ -1191,7 +1192,7 @@ class ImportTopics(Resource):
     @token_required()
     def post(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         
         data = request.get_json()
@@ -1211,7 +1212,7 @@ class ImportMicroblogs(Resource):
     @token_required()
     def post(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         
         data = request.get_json()
@@ -1231,7 +1232,7 @@ class ImportPosts(Resource):
     @token_required()
     def post(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         
         data = request.get_json()
@@ -1251,7 +1252,7 @@ class ImportClassrooms(Resource):
     @token_required()
     def post(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         
         data = request.get_json()
@@ -1271,7 +1272,7 @@ class ImportFeedback(Resource):
     @token_required()
     def post(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         
         data = request.get_json()
@@ -1291,7 +1292,7 @@ class ImportStudy(Resource):
     @token_required()
     def post(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         
         data = request.get_json()
@@ -1311,7 +1312,7 @@ class ImportPersonas(Resource):
     @token_required()
     def post(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         
         data = request.get_json()
@@ -1331,7 +1332,7 @@ class ImportUserPersonas(Resource):
     @token_required()
     def post(self):
         current_user = g.current_user
-        if current_user.role != 'Admin':
+        if current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         
         data = request.get_json()
@@ -1350,7 +1351,7 @@ class ImportLeaderboard(Resource):
     """Import SCORE_COUNTER leaderboard events only"""
     @token_required()
     def post(self):
-        if g.current_user.role != 'Admin':
+        if g.current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
 
         data = request.get_json()
@@ -1367,7 +1368,7 @@ class ImportElementaryLeaderboard(Resource):
     """Import elementary leaderboard events only"""
     @token_required()
     def post(self):
-        if g.current_user.role != 'Admin':
+        if g.current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
 
         data = request.get_json()
@@ -1389,7 +1390,7 @@ class ImportSkillSnapshots(Resource):
     """Import skill snapshots only"""
     @token_required()
     def post(self):
-        if g.current_user.role != 'Admin':
+        if g.current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
 
         data = request.get_json()
@@ -1407,7 +1408,7 @@ class ExportPresence(Resource):
     """Export the presence system's tables as one bundle (model/presence_backup.py)."""
     @token_required()
     def get(self):
-        if g.current_user.role != 'Admin':
+        if g.current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         return jsonify({'presence': export_presence()})
 
@@ -1416,7 +1417,7 @@ class ImportPresence(Resource):
     """Import the presence bundle. Matches people by uid; skips rows that already exist."""
     @token_required()
     def post(self):
-        if g.current_user.role != 'Admin':
+        if g.current_user.role != account_types.admin_role():
             return {'message': 'Admin privileges required'}, 403
         data = request.get_json(silent=True) or {}
         tables = import_presence(data.get('presence') or {})
