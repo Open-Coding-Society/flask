@@ -355,21 +355,33 @@ safe, and it is the only order in which the pull can verify itself.
    transfer. Keep your local copy until it reports a clean reconciliation -- until then
    your local database is the only complete copy of that data.
 
-### When the change only adds tables: `db_upgrade.py`
+### When the change only adds tables or columns: `db_upgrade.py`
 
-Most schema changes only add a model. For those, skip the wipe-and-reload above:
-`scripts/db_upgrade.py` creates the missing tables in place and touches nothing else.
+Most schema changes only add a model or a column. For those, skip the wipe-and-reload
+above: `scripts/db_upgrade.py` creates missing tables and adds missing columns in place,
+and touches nothing else.
 
 ```bash
-python scripts/db_upgrade.py --check     # what would change; exit 2 = tables to create
-python scripts/db_upgrade.py             # backup, create_all(), re-count every table
+python scripts/db_upgrade.py --check                 # prints the SQL; exit 2 = changes to make
+python scripts/db_upgrade.py                         # backup, ALTER TABLE, create_all(), re-count every table
+python scripts/db_upgrade.py --fill users.active=1   # existing rows get 1, new rows the model default
 ```
 
-It refuses (and changes nothing) when an existing table is missing a column, because
-`create_all()` cannot add one -- use an `ALTER TABLE` or the full workflow above for that.
-Tables and columns the models no longer use are listed and left in place. On production
-the web container has no `mysqldump`, so take the dump on the host first and pass it in
-with `--backup-file`; the exact commands are in the migration runbook.
+A column is added with `ALTER TABLE ... ADD COLUMN` when existing rows can get a value:
+it allows NULL, or it has a fixed default (`default=0`, `default="User"`). Existing rows
+get NULL or that default. When they need something else, such as keeping current accounts
+active while new ones start inactive, pass `--fill table.column=value`. `--fill` also lets
+a NOT NULL column with no fixed default (e.g. `default=datetime.utcnow`) be added.
+
+It refuses, and changes nothing, when a missing column is a primary key, unique, a foreign
+key, or NOT NULL with no fixed default and no `--fill`. Use the full workflow above for
+those. Tables and columns the models no longer use are listed and left in place.
+
+On production the web container has no `mysqldump`, so take the dump on the host first and
+pass it in with `--backup-file`; the exact commands are in the migration runbook. A new
+column on an existing table breaks every query of that table until it exists, so run the
+upgrade right after `docker compose up -d --build`, with the dump already taken.
+`python scripts/verify_db_upgrade.py` checks all of this on a throwaway database.
 
 ### Tables covered by the migration
 
