@@ -178,7 +178,7 @@ class UserAPI:
             if uid is None or len(uid) < 2:
                 return {'message': f'User ID is missing, or is less than 2 characters'}, 400
           
-            # The account type (see model/account_types.json) sets the role. A type with Google
+            # The account type (see model/dataconfigs/account_types.json) sets the role. A type with Google
             # domains is activated only when Google verifies an email in them for the submitted
             # token; a type that is active on sign-up (a guest) is activated at once; any other
             # type stays inactive until a Teacher/Admin verifies it.
@@ -886,7 +886,7 @@ class UserAPI:
 
     class _VerifyAccount(Resource):
         """Teacher/Admin verifies any account: marks it active and records last_verified.
-        How long that covers is fixed for some roles (see model/account_types.json); for the
+        How long that covers is fixed for some roles (see model/dataconfigs/account_types.json); for the
         others the optional JSON body {"days": N} says (1 up to the full interval), and
         default_verification_days applies when it is left out."""
         @token_required(account_types.staff_roles())
@@ -957,7 +957,7 @@ class UserAPI:
 
     class _AdminCreate(Resource):
         """Teacher/Admin creates an account of a staff-created type (see
-        model/account_types.json). The account starts inactive and follows the same
+        model/dataconfigs/account_types.json). The account starts inactive and follows the same
         verification step as a self-created one."""
         @token_required(account_types.staff_roles())
         def post(self):
@@ -979,7 +979,7 @@ class UserAPI:
     class _GuestWindow(Resource):
         """The Guest Window (see model/guest_window.py). Anyone can ask whether it is open. A
         Teacher/Admin opens it with {"minutes": N}, N up to window_max_minutes in
-        model/account_types.json, and can close it at any time."""
+        model/dataconfigs/account_types.json, and can close it at any time."""
         def get(self):
             closes = guest_window.closes_at()
             return {'open': closes is not None, 'closes_at': None if closes is None else closes.isoformat()}

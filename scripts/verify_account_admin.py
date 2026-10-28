@@ -255,7 +255,7 @@ def main():
     check("a deactivated Admin's still-open session cannot delete (403)", r.status_code == 403 and exists("zz_gone_mentor3"), r.status_code)
     set_active("zz_admin2", True)
 
-    # the must-keep roles come from the data (model/account_types.json), not from code
+    # the must-keep roles come from the data (model/dataconfigs/account_types.json), not from code
     set_active("zz_admin2", False)
     changed = copy.deepcopy(account_types._data)
     changed["essential_roles"] = ["Mentor"]
@@ -471,7 +471,7 @@ def main():
                         and n.value in ("Admin", "Teacher", "Mentor", "Guest") and id(n) not in docstrings})
         check(f"{os.path.relpath(name, REPO)} names no roles", not named, f"lines {named}")
 
-    # which role is the Admin role comes from the data (model/account_types.json), not from code
+    # which role is the Admin role comes from the data (model/dataconfigs/account_types.json), not from code
     changed = copy.deepcopy(account_types._data)
     changed["admin_role"] = "Principal"
     with app.app_context():
@@ -491,7 +491,7 @@ def main():
         refused = True
     check("an admin_role that is not one of the staff roles is refused at startup", refused)
 
-    # who counts as staff comes from the data (model/account_types.json), not from code
+    # who counts as staff comes from the data (model/dataconfigs/account_types.json), not from code
     changed = copy.deepcopy(account_types._data)
     changed["staff_roles"] = ["Teacher"]
     with app.app_context():
