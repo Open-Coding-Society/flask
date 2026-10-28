@@ -1,0 +1,11 @@
+{
+  "schools": [
+    {"name": "Abraxas High School", "label": "Abraxas"},
+    {"name": "Del Norte High School", "label": "Del Norte"},
+    {"name": "Mt Carmel High School", "label": "Mt Carmel"},
+    {"name": "Poway High School", "label": "Poway"},
+    {"name": "Poway to Palomar", "label": "Poway to Palomar"},
+    {"name": "Rancho Bernardo High School", "label": "Rancho Bernardo"},
+    {"name": "Westview High School", "label": "Westview"}
+  ]
+}

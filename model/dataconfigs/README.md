@@ -2,11 +2,12 @@
 
 The values that make this deployment *this* deployment, kept as data instead of code. A school or
 organisation that forks OCS changes the files here, not the Python. Code that decides who may do
-something reads these files; it does not name a role itself.
+something, or what a form offers, reads these files; it does not name a role, a school or an email domain itself.
 
-| File | What it holds | Read by |
-|---|---|---|
-| `account_types.json` | The kinds of account, their roles, who counts as staff, how long a verification lasts, what each type may do | `model/account_types.py` |
+| File | What it holds | Read by | Served to the pages by |
+|---|---|---|---|
+| `account_types.json` | The kinds of account, their roles, who counts as staff, how long a verification lasts, what each type may do | `model/account_types.py` | `GET /api/signup-options` (the form's part only) |
+| `schools.json` | The schools a student can choose at sign-up | `model/schools.py` | `GET /api/signup-options` |
 
 Each file is added to this folder in the change that makes its values data. Data files that are not
 here yet: `model/presence_schedules.json`, the starter bell schedules for the presence system.
@@ -49,12 +50,27 @@ at the top of `model/account_types.py` are the full reference; the groups are:
 A type that skips the GitHub check must have a list of allowed requests and the Guest Window, and its
 role cannot be a staff role. The loader refuses anything else.
 
+## schools.json
+
+A list of `{"name": ..., "label": ...}`. The **name** is saved on the account; the **label** is what the
+form shows. Names must be unique. Nothing checks an account's school against the list: it is what the
+form offers, not a rule about who can have an account.
+
+## What the sign-up page is told
+
+`GET /api/signup-options` is public, because the form is shown to people with no account. It sends the
+schools. It sends nothing about roles, lifetimes or limits. The pages build the form from it. They keep their
+own list of schools, used only when Flask cannot be asked (an older Flask, an error), so sign-up
+never ends up with nothing to choose.
+
 ## Changing something
 
-1. **Rename a role** (say `Teacher` becomes `Instructor`): change it in `staff_roles`, in the type, and in
+1. **Add a school:** add an entry to `schools.json`, restart.
+2. **Rename a role** (say `Teacher` becomes `Instructor`): change it in `staff_roles`, in the type, and in
    the accounts already saved (a database update: roles are stored on each account). Code does not name
    the roles, so that is all.
-2. **Run the checks** from the repo root, each against a throwaway database:
+3. **Run the checks** from the repo root, each against a throwaway database:
+   `python scripts/verify_signup_options.py` (what the form is told),
    `python scripts/verify_account_admin.py`,
    `python scripts/verify_activation.py`,
    `python scripts/verify_dataconfigs.py` (that these files are here and explained). Set
@@ -73,4 +89,4 @@ role cannot be a staff role. The loader refuses anything else.
 Still in code, and candidates to move here: the default role `"User"` in the model and the restore code,
 `User.is_teacher()`, the seeded accounts' roles, the password rule (it must stay in step with Spring's),
 the starter sections (CSP, CSSE, CSA), and the allowed origins for cross-origin requests.
-The sign-up page's own lists of account types and Google domains are not data yet. Neither is its list of schools.
+The sign-up page's own lists of account types and Google domains are not data yet.
