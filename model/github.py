@@ -60,8 +60,21 @@ class GitHubUser(Resource):
         start_date_iso = start_date.strftime('%Y-%m-%dT%H:%M:%SZ')
         end_date_iso = end_date.strftime('%Y-%m-%dT%H:%M:%SZ')
 
+        # GitHub filters each repo's history to this user's commits. Reading the latest
+        # commits by everyone and keeping this user's missed most of them in busy repos:
+        # pages gets thousands of commits a trimester, so only the newest 100 were read and
+        # the count fell every day as classmates pushed.
+        id_data, status_code = self.make_github_graphql_request(
+            "query($login: String!) { user(login: $login) { id } }", {"login": uid})
+        if status_code != 200:
+            return {'error': 'Failed to fetch data from GitHub'}, status_code
+        github_user = ((id_data or {}).get('data') or {}).get('user')
+        if not github_user:
+            return {'error': f'GitHub user {uid} not found'}, 404
+        author_id = github_user['id']
+
         repo_query = """
-        query($login: String!, $since: GitTimestamp!, $until: GitTimestamp!) {
+        query($login: String!, $since: GitTimestamp!, $until: GitTimestamp!, $authorId: ID!) {
         user(login: $login) {
             repositoriesContributedTo(first: 50, contributionTypes: [COMMIT], includeUserRepositories: true) {
             nodes {
@@ -71,18 +84,13 @@ class GitHubUser(Resource):
                 name
                 target {
                     ... on Commit {
-                    history(first: 100, since: $since, until: $until) {
+                    history(first: 100, since: $since, until: $until, author: {id: $authorId}) {
                         nodes {
                         committedDate
                         messageHeadline
                         additions
                         deletions
                         url
-                        author {
-                            user {
-                            login
-                            }
-                        }
                         }
                     }
                     }
@@ -97,7 +105,8 @@ class GitHubUser(Resource):
         variables = {
             "login": uid,
             "since": start_date_iso,
-            "until": end_date_iso
+            "until": end_date_iso,
+            "authorId": author_id
         }
 
         response_data, status_code = self.make_github_graphql_request(repo_query, variables)
@@ -122,10 +131,6 @@ class GitHubUser(Resource):
 
                 history = branch['target'].get('history', {}).get('nodes', [])
                 for commit in history:
-                    author_info = commit.get('author', {}).get('user')
-                    if not author_info or author_info.get('login') != uid:
-                        continue  # Skip commits not by the specified user
-
                     additions = commit.get('additions', 0)
                     deletions = commit.get('deletions', 0)
                     total_additions += additions
