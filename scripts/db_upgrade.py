@@ -4,9 +4,12 @@ Bring an existing database up to the models WITHOUT dropping anything.
 
 Compares the models against the live database, then:
 - creates tables the models have and the database does not (db.create_all()),
-- leaves tables and columns the models no longer use in place, and lists them,
-- REFUSES when an existing table is missing a column. create_all() cannot add one,
-  so that change needs an ALTER TABLE (or the full db_init.py + restore workflow).
+- adds columns the models have and an existing table does not (ALTER TABLE ... ADD
+  COLUMN), when existing rows can be given a value: the column allows NULL, or it has a
+  fixed default. Existing rows get NULL or that default.
+- REFUSES, changing nothing, when a missing column is a primary key, unique, a foreign
+  key, or NOT NULL with no fixed default. Those need the full db_init.py + restore workflow.
+- leaves tables and columns the models no longer use in place, and lists them.
 
 No row is deleted or rewritten. Every pre-existing table is re-counted afterwards
 and the run fails if any count changed.
@@ -21,7 +24,7 @@ Usage (from the flask repo root):
   python scripts/db_upgrade.py                           # backup, then upgrade
   python scripts/db_upgrade.py --backup-file instance/backups/<dump>.sql
 
-Exit: 0 up to date or upgraded, 1 refused or failed, 2 (--check) tables to create.
+Exit: 0 up to date or upgraded, 1 refused or failed, 2 (--check) changes to make.
 """
 import argparse
 import os
@@ -29,6 +32,8 @@ import shutil
 import sqlite3
 import sys
 from datetime import datetime
+
+import sqlalchemy as sa
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
@@ -53,6 +58,58 @@ def compare():
             unused_cols[name] = sorted(live_cols - model_cols)
     unused_tables = sorted(live - set(models))
     return to_create, missing, unused_tables, unused_cols
+
+
+def fixed_default(col, dialect):
+    """SQL for the value existing rows get, None for NULL, or raise ValueError."""
+    if col.server_default is not None:
+        arg = getattr(col.server_default, 'arg', None)
+        if isinstance(arg, str):
+            return sa.literal(arg).compile(dialect=dialect, compile_kwargs={'literal_binds': True}).string
+        if arg is not None:
+            return str(arg.compile(dialect=dialect))
+    if col.default is not None:
+        if not col.default.is_scalar:
+            return None  # a Python function: new rows only, existing rows get NULL
+        try:
+            return sa.literal(col.default.arg, col.type).compile(
+                dialect=dialect, compile_kwargs={'literal_binds': True}).string
+        except Exception as e:
+            raise ValueError(f"its default {col.default.arg!r} can't be written as SQL ({e})")
+    return None
+
+
+def add_column_sql(table, col):
+    """(ALTER TABLE statement, None) when the column can be added in place, else (None, reason)."""
+    dialect = db.engine.dialect
+    q = dialect.identifier_preparer.quote
+    if col.primary_key:
+        return None, "it is a primary key"
+    if col.unique or any(idx.unique and col.name in idx.columns for idx in table.indexes):
+        return None, "it is unique, and existing rows would all share one value"
+    if col.foreign_keys:
+        return None, "it is a foreign key"
+    try:
+        col_type = col.type.compile(dialect=dialect)
+        default = fixed_default(col, dialect)
+    except Exception as e:
+        return None, str(e)
+    if default is None and not col.nullable:
+        return None, "it is NOT NULL with no fixed default, so existing rows would have no value"
+    if default is not None and dialect.name == 'mysql' and col_type.upper().split('(')[0] in ('TEXT', 'MEDIUMTEXT', 'LONGTEXT', 'BLOB', 'JSON'):
+        default = f"({default})"  # MySQL takes a default on these types only as an expression
+    sql = f"ALTER TABLE {q(table.name)} ADD COLUMN {q(col.name)} {col_type}"
+    if default is not None:
+        sql += f" DEFAULT {default}"
+    sql += " NULL" if col.nullable else " NOT NULL"
+    return sql, None
+
+
+def plan_columns(missing):
+    """{table: [(column, sql, reason)]} for every missing column."""
+    tables = db.metadata.tables
+    return {t: [(c, *add_column_sql(tables[t], tables[t].columns[c])) for c in cols]
+            for t, cols in missing.items()}
 
 
 def row_counts(tables):
@@ -91,11 +148,12 @@ def take_backup():
     return backup_mysql_database()
 
 
-def report(to_create, missing, unused_tables, unused_cols):
+def report(to_create, plan, unused_tables, unused_cols):
     print(f"Database: {db.engine.dialect.name}")
     print(f"Tables to create:  {', '.join(to_create) or 'none'}")
-    for t, cols in missing.items():
-        print(f"MISSING COLUMNS:   {t}: {', '.join(cols)}")
+    for t, cols in plan.items():
+        for c, sql, reason in cols:
+            print(f"Column to add:     {sql}" if sql else f"CANNOT ADD:        {t}.{c}: {reason}")
     if unused_tables:
         print(f"Unused tables (left in place): {', '.join(unused_tables)}")
     for t, cols in unused_cols.items():
@@ -103,25 +161,29 @@ def report(to_create, missing, unused_tables, unused_cols):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Create missing tables without dropping anything.")
+    parser = argparse.ArgumentParser(description="Create missing tables and columns without dropping anything.")
     parser.add_argument('--check', action='store_true', help="report only, change nothing")
     parser.add_argument('--backup-file', help="a backup you already took (required where mysqldump is unavailable)")
     args = parser.parse_args()
 
     with app.app_context():
         to_create, missing, unused_tables, unused_cols = compare()
-        report(to_create, missing, unused_tables, unused_cols)
+        plan = plan_columns(missing)
+        report(to_create, plan, unused_tables, unused_cols)
+        statements = [sql for cols in plan.values() for _, sql, _ in cols if sql]
+        refused = [f"{t}.{c}" for t, cols in plan.items() for c, sql, _ in cols if not sql]
 
-        if missing:
-            print("\nRefusing: create_all() cannot add a column to an existing table.")
-            print("Add it with ALTER TABLE (and a default for existing rows), or use the full")
+        if refused:
+            print(f"\nRefusing: {', '.join(refused)} can't be added in place (reasons above).")
+            print("Make the column nullable or give it a fixed default, or use the full")
             print("db_init.py + restore workflow. Nothing was changed.")
             return 1
-        if not to_create:
+        if not to_create and not statements:
             print("\nUp to date. Nothing to do.")
             return 0
         if args.check:
-            print(f"\n{len(to_create)} table(s) would be created. Run without --check to apply.")
+            print(f"\n{len(to_create)} table(s) would be created and {len(statements)} column(s) added."
+                  " Run without --check to apply.")
             return 2
 
         if args.backup_file:
@@ -136,19 +198,25 @@ def main():
 
         existing = sorted(set(db.metadata.tables) - set(to_create))
         before = row_counts(existing)
+        with db.engine.begin() as conn:
+            for sql in statements:
+                conn.execute(sa.text(sql))
         db.create_all()
         after = row_counts(existing)
 
-        still_missing = compare()[0]
+        still_to_create, still_missing = compare()[:2]
         changed = {t: (before[t], after[t]) for t in existing if before[t] != after[t]}
-        print(f"\nCreated: {', '.join(t for t in to_create if t not in still_missing)}")
-        if still_missing or changed:
-            print(f"FAILED. Not created: {still_missing or 'none'}. Row counts changed: {changed or 'none'}")
+        if to_create:
+            print(f"\nCreated: {', '.join(t for t in to_create if t not in still_to_create)}")
+        if statements:
+            print(f"Added {len(statements)} column(s).")
+        if still_to_create or still_missing or changed:
+            print(f"FAILED. Not created: {still_to_create or 'none'}. Columns still missing: "
+                  f"{still_missing or 'none'}. Row counts changed: {changed or 'none'}")
             return 1
         print(f"All {len(existing)} existing tables kept their row counts ({sum(after.values())} rows).")
         print("Upgrade complete.")
         return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
