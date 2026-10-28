@@ -54,6 +54,19 @@ class GitHubUser(Resource):
         except Exception as e:
             return {'message': str(e)}, 500
 
+    MORE_COMMITS_QUERY = """
+    query($owner: String!, $name: String!, $after: String!, $since: GitTimestamp!, $until: GitTimestamp!, $authorId: ID!) {
+        repository(owner: $owner, name: $name) {
+            defaultBranchRef { target { ... on Commit {
+                history(first: 100, after: $after, since: $since, until: $until, author: {id: $authorId}) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes { committedDate messageHeadline additions deletions url }
+                }
+            } } }
+        }
+    }
+    """
+
     def get_commit_stats(self, uid, start_date_str, end_date_str):
         start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
         end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
@@ -85,6 +98,7 @@ class GitHubUser(Resource):
                 target {
                     ... on Commit {
                     history(first: 100, since: $since, until: $until, author: {id: $authorId}) {
+                        pageInfo { hasNextPage endCursor }
                         nodes {
                         committedDate
                         messageHeadline
@@ -129,8 +143,21 @@ class GitHubUser(Resource):
                 if not branch or not branch.get('target'):
                     continue
 
-                history = branch['target'].get('history', {}).get('nodes', [])
-                for commit in history:
+                history = branch['target'].get('history', {})
+                commits = history.get('nodes', [])
+                page = history.get('pageInfo') or {}
+                # More than 100 of this user's commits in one repo: read the rest.
+                while page.get('hasNextPage'):
+                    more, status_code = self.make_github_graphql_request(self.MORE_COMMITS_QUERY, {
+                        "owner": repo['owner']['login'], "name": repo['name'], "after": page['endCursor'],
+                        "since": start_date_iso, "until": end_date_iso, "authorId": author_id})
+                    if status_code != 200:
+                        return {'error': 'Failed to fetch data from GitHub'}, status_code
+                    history = more['data']['repository']['defaultBranchRef']['target']['history']
+                    commits += history.get('nodes', [])
+                    page = history.get('pageInfo') or {}
+
+                for commit in commits:
                     additions = commit.get('additions', 0)
                     deletions = commit.get('deletions', 0)
                     total_additions += additions
