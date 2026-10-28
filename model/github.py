@@ -185,10 +185,24 @@ class GitHubUser(Resource):
             'details_of_commits': details_of_commits
         }, 200
 
+    def search_all(self, query, search_query):
+        """Every edge of a GitHub search, 100 per request (GitHub stops a search at 1000)."""
+        edges, after = [], None
+        while True:
+            data, status_code = self.make_github_graphql_request(query, {"query": search_query, "after": after})
+            if status_code != 200:
+                return data, status_code
+            search = data['data']['search']
+            edges += search['edges']
+            if not search['pageInfo']['hasNextPage']:
+                return edges, 200
+            after = search['pageInfo']['endCursor']
+
     def get_pr_stats(self, uid, start_date_str, end_date_str):
         query = """
-        query($query: String!) {
-            search(query: $query, type: ISSUE, first: 100) {
+        query($query: String!, $after: String) {
+            search(query: $query, type: ISSUE, first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
                 edges {
                     node {
                         ... on PullRequest {
@@ -216,21 +230,17 @@ class GitHubUser(Resource):
         }
         """
         search_query = f"type:pr author:{uid} created:{start_date_str}..{end_date_str}"
-        variables = {
-            "query": search_query
-        }
-        data, status_code = self.make_github_graphql_request(query, variables)
+        pr_stats, status_code = self.search_all(query, search_query)
         if status_code != 200:
-            return data, status_code
-
-        pr_stats = data['data']['search']['edges']
+            return pr_stats, status_code
 
         return {'pull_requests': pr_stats}, 200
 
     def get_issue_stats(self, uid, start_date_str, end_date_str):
         query = """
-        query($query: String!) {
-            search(query: $query, type: ISSUE, first: 100) {
+        query($query: String!, $after: String) {
+            search(query: $query, type: ISSUE, first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
                 edges {
                     node {
                         ... on Issue {
@@ -259,14 +269,9 @@ class GitHubUser(Resource):
         }
         """
         search_query = f"type:issue author:{uid} created:{start_date_str}..{end_date_str}"
-        variables = {
-            "query": search_query
-        }
-        data, status_code = self.make_github_graphql_request(query, variables)
+        issue_stats, status_code = self.search_all(query, search_query)
         if status_code != 200:
-            return data, status_code
-
-        issue_stats = data['data']['search']['edges']
+            return issue_stats, status_code
         return {'issues': issue_stats}, 200
 
     def get_total_received_issue_comments(self, user_id, start_date, end_date):
