@@ -440,14 +440,22 @@ def main():
             check("a guest can react to their own post (200)", own_id is not None and r.status_code == 200, f"{r.status_code} {r.get_data(as_text=True)[:80]}")
             r = c.post("/api/microblog", json={"content": "x" * 281})
             check("the post rules still apply to a guest: more than 280 characters is refused (400)", r.status_code == 400, r.status_code)
+            r = c.put("/api/microblog", json={"id": own_id, "content": "a guest post, edited"})
+            check("a guest can edit their own post (200)", r.status_code == 200 and "edited" in r.get_data(as_text=True), f"{r.status_code} {r.get_data(as_text=True)[:100]}")
+            r = c.put("/api/microblog", json={"id": post_id, "content": "a guest editing a student's post"})
+            check("but not somebody else's: the post's own owner rule answers, not the guest limit (403, Permission denied)", r.status_code == 403 and "Permission denied" in r.get_data(as_text=True), f"{r.status_code} {r.get_data(as_text=True)[:100]}")
+            r = c.delete("/api/microblog", json={"id": post_id})
+            check("a guest cannot delete somebody else's post either (403, Permission denied)", r.status_code == 403 and "Permission denied" in r.get_data(as_text=True), f"{r.status_code} {r.get_data(as_text=True)[:100]}")
+            check("and that post is still there", post_id in [m.get("id") for m in c.get("/api/microblog").get_json().get("microblogs", [])])
+            r = c.delete("/api/microblog", json={"id": own_id})
+            check("a guest can delete their own post (200), and it is gone", r.status_code == 200 and own_id not in [m.get("id") for m in c.get("/api/microblog").get_json().get("microblogs", [])], f"{r.status_code} {r.get_data(as_text=True)[:100]}")
             r = c.post("/api/microblog/reply", json={"postId": post_id, "content": "a guest comment"})
             check("a guest can comment on a post (200)", post_id is not None and r.status_code == 200 and "reply" in r.get_json(), f"{post_id} {r.status_code}")
             r = c.post("/api/microblog/reaction", json={"postId": post_id, "reactionType": "like"})
             check("a guest can react to a post (200)", r.status_code == 200, f"{r.status_code} {r.get_data(as_text=True)[:80]}")
             r = c.delete("/api/microblog/reaction", json={"postId": post_id, "reactionType": "like"})
             check("and take the reaction back (200)", r.status_code == 200, f"{r.status_code} {r.get_data(as_text=True)[:80]}")
-            denied = [("PUT", "/api/microblog", {"id": post_id, "content": "edited"}), ("DELETE", "/api/microblog", {"id": post_id}),
-                      ("PUT", "/api/user", {"name": "Hacked"}), ("GET", "/api/user", None),
+            denied = [("PUT", "/api/user", {"name": "Hacked"}), ("GET", "/api/user", None),
                       ("GET", "/api/user/section", None), ("POST", "/api/user/section", {"sections": []}), ("DELETE", "/api/user", {"uid": "zz_student"}),
                       ("GET", "/api/user/class", None), ("POST", "/api/user/zz_student/verify", {}), ("POST", "/api/guest/window", {"minutes": 60}),
                       ("DELETE", "/api/guest/window", None), ("POST", "/api/guest/disable", None)]
@@ -477,7 +485,7 @@ def main():
             r = c.put("/api/user", json={"name": "Via the form login"})
             check("the limit holds for the form login session on the API too (403)", r.status_code == 403, r.status_code)
         check("a trailing slash does not change what is allowed, a different method does, and an unlimited role is always allowed",
-              _gt.request_allowed("Guest", "GET", "/api/microblog/") and _gt.request_allowed("Guest", "POST", "/api/microblog") and not _gt.request_allowed("Guest", "DELETE", "/api/microblog")
+              _gt.request_allowed("Guest", "GET", "/api/microblog/") and _gt.request_allowed("Guest", "POST", "/api/microblog") and not _gt.request_allowed("Guest", "DELETE", "/api/microblog/reply")
               and not _gt.request_allowed("Guest", "GET", "/api/user") and _gt.request_allowed("User", "DELETE", "/api/user"))
 
         # ---- three hours, then inactive, and the record stays
