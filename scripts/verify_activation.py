@@ -432,13 +432,22 @@ def main():
             check("a guest can ask who they are (200)", c.get("/api/id").status_code == 200)
             r = c.get("/api/microblog")
             check("a guest can view the microblog (200)", r.status_code == 200 and "microblogs" in r.get_json(), r.status_code)
+            r = c.post("/api/microblog", json={"content": "a guest post"})
+            own_id = (r.get_json() or {}).get("id")
+            check("a guest can write a post (200), and it is theirs", r.status_code == 200 and own_id is not None and (r.get_json() or {}).get("userId", (r.get_json() or {}).get("user_id", row("zz_guest1")["id"])) == row("zz_guest1")["id"], f"{r.status_code} {r.get_data(as_text=True)[:100]}")
+            check("and it shows in the microblog", own_id in [m.get("id") for m in c.get("/api/microblog").get_json().get("microblogs", [])])
+            r = c.post("/api/microblog/reaction", json={"postId": own_id, "reactionType": "like"})
+            check("a guest can react to their own post (200)", own_id is not None and r.status_code == 200, f"{r.status_code} {r.get_data(as_text=True)[:80]}")
+            r = c.post("/api/microblog", json={"content": "x" * 281})
+            check("the post rules still apply to a guest: more than 280 characters is refused (400)", r.status_code == 400, r.status_code)
             r = c.post("/api/microblog/reply", json={"postId": post_id, "content": "a guest comment"})
             check("a guest can comment on a post (200)", post_id is not None and r.status_code == 200 and "reply" in r.get_json(), f"{post_id} {r.status_code}")
             r = c.post("/api/microblog/reaction", json={"postId": post_id, "reactionType": "like"})
             check("a guest can react to a post (200)", r.status_code == 200, f"{r.status_code} {r.get_data(as_text=True)[:80]}")
             r = c.delete("/api/microblog/reaction", json={"postId": post_id, "reactionType": "like"})
             check("and take the reaction back (200)", r.status_code == 200, f"{r.status_code} {r.get_data(as_text=True)[:80]}")
-            denied = [("POST", "/api/microblog", {"content": "a new post"}), ("PUT", "/api/user", {"name": "Hacked"}), ("GET", "/api/user", None),
+            denied = [("PUT", "/api/microblog", {"id": post_id, "content": "edited"}), ("DELETE", "/api/microblog", {"id": post_id}),
+                      ("PUT", "/api/user", {"name": "Hacked"}), ("GET", "/api/user", None),
                       ("GET", "/api/user/section", None), ("POST", "/api/user/section", {"sections": []}), ("DELETE", "/api/user", {"uid": "zz_student"}),
                       ("GET", "/api/user/class", None), ("POST", "/api/user/zz_student/verify", {}), ("POST", "/api/guest/window", {"minutes": 60}),
                       ("DELETE", "/api/guest/window", None), ("POST", "/api/guest/disable", None)]
@@ -468,7 +477,7 @@ def main():
             r = c.put("/api/user", json={"name": "Via the form login"})
             check("the limit holds for the form login session on the API too (403)", r.status_code == 403, r.status_code)
         check("a trailing slash does not change what is allowed, a different method does, and an unlimited role is always allowed",
-              _gt.request_allowed("Guest", "GET", "/api/microblog/") and not _gt.request_allowed("Guest", "POST", "/api/microblog")
+              _gt.request_allowed("Guest", "GET", "/api/microblog/") and _gt.request_allowed("Guest", "POST", "/api/microblog") and not _gt.request_allowed("Guest", "DELETE", "/api/microblog")
               and not _gt.request_allowed("Guest", "GET", "/api/user") and _gt.request_allowed("User", "DELETE", "/api/user"))
 
         # ---- three hours, then inactive, and the record stays

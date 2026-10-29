@@ -37,6 +37,7 @@
         "GET /logout",
         "DELETE /api/authenticate",
         "GET /api/microblog",
+        "POST /api/microblog",
         "POST /api/microblog/reply",
         "POST /api/microblog/reaction",
         "DELETE /api/microblog/reaction"
