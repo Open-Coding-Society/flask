@@ -8,6 +8,27 @@
     {% set is_staff = current_user.is_staff() %}
 
     {% if is_staff %}
+    <div class="card mb-3" id="guestWindow">
+        <div class="card-body d-flex flex-wrap align-items-center gap-3">
+            <div>
+                <strong>Guest Window</strong>:
+                {% if guest_window_closes %}
+                <span class="text-success">open until <span id="guestWindowCloses" data-closes="{{ guest_window_closes }}"></span></span>
+                {% else %}
+                <span class="text-secondary">closed</span>. Guests cannot sign up or come back.
+                {% endif %}
+            </div>
+            <label class="mb-0">Open for
+                <input type="number" id="guestWindowMinutes" class="form-control d-inline-block w-auto" min="1" max="{{ guest_window_max }}" value="{{ [60, guest_window_max]|min }}"> minutes (up to {{ guest_window_max }})
+            </label>
+            <button type="button" class="btn btn-success" id="guestWindowOpen">Open</button>
+            <button type="button" class="btn btn-outline-secondary" id="guestWindowClose"{% if not guest_window_closes %} disabled{% endif %}>Close</button>
+            <button type="button" class="btn btn-danger" id="guestDisable">Disable all guests now</button>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if is_staff %}
     <div class="d-flex flex-wrap align-items-center gap-3 mb-3" id="accountFilters">
         <div class="btn-group" role="group" aria-label="Filter by status">
             <button type="button" class="btn btn-outline-secondary active" data-status="all">All</button>
@@ -238,6 +259,35 @@
                     });
             });
         });
+
+        // Guest Window: open, close, or disable every guest at once
+        const guestWindowCloses = document.getElementById("guestWindowCloses");
+        if (guestWindowCloses) {
+            guestWindowCloses.textContent = new Date(guestWindowCloses.dataset.closes).toLocaleTimeString();
+        }
+        function guestRequest(url, method, body, confirmation) {
+            if (confirmation && !confirm(confirmation)) return;
+            const request = { method };
+            if (body) {
+                request.headers = { "Content-Type": "application/json" };
+                request.body = JSON.stringify(body);
+            }
+            fetch(url, request)
+                .then(response => response.json().then(data => ({ ok: response.ok, data })))
+                .then(({ ok, data }) => {
+                    if (!ok) throw new Error(data.message || "Request failed");
+                    location.reload();
+                })
+                .catch(error => alert(error.message || "Request failed."));
+        }
+        const guestOpen = document.getElementById("guestWindowOpen");
+        if (guestOpen) {
+            guestOpen.addEventListener("click", () => guestRequest("/api/guest/window", "POST",
+                { minutes: Number(document.getElementById("guestWindowMinutes").value) }));
+            document.getElementById("guestWindowClose").addEventListener("click", () => guestRequest("/api/guest/window", "DELETE"));
+            document.getElementById("guestDisable").addEventListener("click", () => guestRequest("/api/guest/disable", "POST", null,
+                "Close the Guest Window and make every guest inactive now?"));
+        }
 
         // Handle activate / verify / deactivate
         document.querySelectorAll(".status-btn").forEach(button => {

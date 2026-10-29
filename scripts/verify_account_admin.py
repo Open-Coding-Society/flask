@@ -297,6 +297,9 @@ def main():
         login_api(c, "zz_teacher")
         r = c.post("/api/user/zz_r_student/role", json={"role": "Mentor"})
         check("a Teacher can change a student to a mentor (200)", r.status_code == 200 and role_of("zz_r_student") == "Mentor", r.status_code)
+        r = c.post("/api/user/zz_r_student/role", json={"role": "Guest"})
+        check("a Teacher cannot turn an existing account into a Guest (400): that role is for sign-up only",
+              r.status_code == 400 and role_of("zz_r_student") != "Guest", f"{r.status_code} {role_of('zz_r_student')}")
         check("... and to a teacher, and back to a student",
               c.post("/api/user/zz_r_student/role", json={"role": "Teacher"}).status_code == 200
               and c.post("/api/user/zz_r_student/role", json={"role": "User"}).status_code == 200 and role_of("zz_r_student") == "User")
@@ -439,6 +442,17 @@ def main():
             teacher_lapses = User.query.filter_by(_uid="zz_v_teacher").first().verification_state == "active_verification_required"
     check("the numbers and the exempt roles come from the data: default 7 days, Mentor exempt, Teacher no longer exempt",
           seven and mentor_exempt and teacher_lapses, f"{seven} {mentor_exempt} {teacher_lapses}")
+
+    # bulk import is for the admin role only, and the role is read from the data
+    with app.test_client() as c:
+        check("bulk import: nobody logged in is refused (401)", c.post("/api/users", json=[]).status_code == 401)
+    with app.test_client() as c:
+        login_api(c, "zz_teacher")
+        check("bulk import: a Teacher is refused (403)", c.post("/api/users", json=[]).status_code == 403)
+    with app.test_client() as c:
+        login_api(c, "zz_admin")
+        r = c.post("/api/users", json={})
+        check("bulk import: an Admin gets as far as the request being checked (400, not a list)", r.status_code == 400, r.status_code)
 
     # the table asks the user who they are (is_admin, is_teacher); it does not name roles itself
     with open(os.path.join(REPO, "templates", "u2table.html"), encoding="utf-8") as fh:
