@@ -7,6 +7,7 @@ import os
 import requests
 from flask import Blueprint, jsonify
 from api.authorize import token_required
+from model import account_types
 
 snapshot_proxy = Blueprint('snapshot_proxy', __name__, url_prefix='/api/snapshot')
 
@@ -35,12 +36,12 @@ def _proxy_snapshot(snapshot_type: str):
 
 
 @snapshot_proxy.route('/aurora', methods=['POST'])
-@token_required("Admin")
+@token_required(account_types.admin_role())
 def trigger_aurora():
     return _proxy_snapshot("aurora")
 
 
 @snapshot_proxy.route('/sqlite', methods=['POST'])
-@token_required("Admin")
+@token_required(account_types.admin_role())
 def trigger_sqlite():
     return _proxy_snapshot("sqlite")

@@ -1,6 +1,7 @@
 from flask import Blueprint, g, request, jsonify
 from flask_restful import Api, Resource
 from api.authorize import auth_required, token_required
+from model import account_types
 from model.skill_snapshot import SkillSnapshot
 from __init__ import db
 
@@ -80,7 +81,7 @@ class SkillPassportAPI:
                 return {'message': f'Error saving snapshot: {str(e)}'}, 500
 
     class _AdminGetPassport(Resource):
-        @auth_required(roles="Admin")
+        @auth_required(roles=account_types.admin_role())
         def get(self, user_id):
             """Admin: get any student's full skill passport"""
             snapshots = (

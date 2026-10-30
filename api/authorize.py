@@ -136,7 +136,7 @@ def auth_required(roles=None):
                         "error": str(e)
                     }, 500
             
-            # An account type can last only a few hours (see model/account_types.json). When it has
+            # An account type can last only a few hours (see model/dataconfigs/account_types.json). When it has
             # passed the account is made inactive, and its record is kept.
             if user.expired():
                 if user.active:

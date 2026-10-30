@@ -1,6 +1,6 @@
 """The Guest Window: the time during which guest accounts can be created, or come back.
 
-A Teacher or Admin opens it for a number of minutes (the most is set in account_types.json) and
+A Teacher or Admin opens it for a number of minutes (the most is set in dataconfigs/account_types.json) and
 can close it sooner. It is kept in a small file in the instance folder, so it is shared by every
 worker, survives a restart, and needs no database table. A missing, unreadable or past
 closing time all mean the window is closed.
