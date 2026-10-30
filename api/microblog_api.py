@@ -27,10 +27,14 @@ class MicroBlogAPI:
            # Validate required fields
            if not body:
                return {'message': 'Request body is required'}, 400
+           if not isinstance(body, dict):
+               return {'message': 'Request body must be a JSON object'}, 400
           
            content = body.get('content')
            if not content:
                return {'message': 'Content is required'}, 400
+           if not isinstance(content, str):
+               return {'message': 'Content must be a string'}, 400
           
            if len(content) > 280:
                return {'message': 'Content must be 280 characters or less'}, 400
@@ -38,7 +42,10 @@ class MicroBlogAPI:
            # Optional fields
            topic_id = body.get('topicId')
            topic_path = body.get('topicPath')  # New field for page path
-           data = body.get('data', {})
+           try:
+               data = MicroBlog.validate_metadata(body.get('data', {}))
+           except ValueError as e:
+               return {'message': str(e)}, 400
           
            # Handle topic creation/lookup
            if topic_path and not topic_id:
@@ -116,6 +123,8 @@ class MicroBlogAPI:
           
            if not body:
                return {'message': 'Request body is required'}, 400
+           if not isinstance(body, dict):
+               return {'message': 'Request body must be a JSON object'}, 400
           
            microblog_id = body.get('id')
            if not microblog_id:
@@ -132,7 +141,7 @@ class MicroBlogAPI:
           
            try:
                content = body.get('content')
-               data = body.get('data')
+               data = MicroBlog.validate_metadata(body['data']) if 'data' in body else None
               
                updated_microblog = microblog.update(content=content, data=data)
                return jsonify(updated_microblog.read())
@@ -284,6 +293,8 @@ class MicroBlogAPI:
                })
 
 
+           except ValueError as e:
+               return {'message': str(e)}, 400
            except Exception as e:
                return {'message': f'Error adding reaction: {str(e)}'}, 500
 
