@@ -4,7 +4,6 @@ Defines the database schema for micro blog posts with JSON flexibility
 """
 from sqlite3 import IntegrityError
 from sqlalchemy import Text, JSON
-from sqlalchemy.orm.attributes import flag_modified
 from __init__ import db
 from datetime import datetime
 import json
@@ -17,9 +16,25 @@ class MicroBlog(db.Model):
    MicroBlog Model
   
    Represents a micro blog post with flexible JSON content and topic organization.
-   Supports replies, reactions, and custom frontend attributes through JSON storage.
+   Stores allowlisted frontend metadata in JSON and authenticated interactions in related tables.
    """
    __tablename__ = 'microblogs'
+
+   # Only presentation metadata may enter through post creation/update.
+   CLIENT_METADATA_FIELDS = frozenset({
+       'lessonProgress', 'rating', 'hashtags', 'helpRequested', 'difficulty',
+       'projectType', 'features', 'seeking', 'standupType', 'tasks', 'blockers',
+       'mood', 'resourceType', 'resourceUrl', 'subject', 'recommendation',
+   })
+
+   @classmethod
+   def validate_metadata(cls, data):
+       if not isinstance(data, dict):
+           raise ValueError("data must be a JSON object")
+       unsupported = set(data) - cls.CLIENT_METADATA_FIELDS
+       if unsupported:
+           raise ValueError("Unsupported metadata fields: " + ", ".join(sorted(unsupported)))
+       return dict(data)
 
 
    # Primary Key
@@ -54,13 +69,15 @@ class MicroBlog(db.Model):
            topic_id: Optional topic/category ID
            data: Optional JSON data for frontend flexibility
        """
+       if not isinstance(content, str):
+           raise ValueError("Content must be a string")
        if len(content) > 280:
            raise ValueError("Content must be 280 characters or less")
           
        self._user_id = user_id
        self._content = content
        self._topic_id = topic_id
-       self._data = data or {}
+       self._data = self.validate_metadata(data if data is not None else {})
        self._timestamp = datetime.utcnow()
 
 
@@ -99,29 +116,31 @@ class MicroBlog(db.Model):
            'updatedAt': self._updated_at.isoformat() if self._updated_at else None,
            'characterCount': len(self._content),
        }
-       # Merge with JSON data, giving priority to base_data for core fields
-       if self._data:
-           merged_data = {**self._data, **base_data}
-       else:
-           merged_data = base_data
-       return merged_data
+       # Never serialize legacy JSON identities or interactions as trusted data.
+       metadata = self._data if isinstance(self._data, dict) else {}
+       return {
+           **{key: value for key, value in metadata.items() if key in self.CLIENT_METADATA_FIELDS},
+           **base_data,
+           'replies': self.get_replies(),
+           'reactions': self.get_reactions(),
+       }
 
 
    def update(self, content=None, data=None):
        """Update micro blog content and/or data"""
        try:
+           metadata = self.validate_metadata(data) if data is not None else None
            if content is not None:
+               if not isinstance(content, str):
+                   raise ValueError("Content must be a string")
                if len(content) > 280:
                    raise ValueError("Content must be 280 characters or less")
                self._content = content
               
-           if data is not None:
-               # Merge new data with existing data
-               if self._data:
-                   self._data.update(data)
-               else:
-                   self._data = data
-                  
+           if metadata is not None:
+               # Reassign JSON so SQLAlchemy persists edits; retain legacy evidence.
+               self._data = {**(self._data or {}), **metadata}
+
            self._updated_at = datetime.utcnow()
            db.session.commit()
            return self
@@ -131,113 +150,70 @@ class MicroBlog(db.Model):
 
 
    def get_replies(self):
-       """Return replies array; empty list if none or malformed."""
-       if not self._data or 'replies' not in self._data or not isinstance(self._data['replies'], list):
-           return []
-       return self._data['replies']
+       """Return only replies created through the server-controlled reply path."""
+       return [reply.read() for reply in MicroBlogReply.query.filter_by(
+           microblog_id=self.id).order_by(MicroBlogReply.id).all()]
 
 
    def add_reply(self, user_id, reply_content):
-       """Add a reply to the JSON data structure, including userName for display."""
+       """Assign reply identity and time on the server, backed by an author FK."""
+       if not isinstance(reply_content, str) or not reply_content.strip():
+           raise ValueError("Reply content is required")
        if len(reply_content) > 280:
            raise ValueError("Reply content must be 280 characters or less")
-      
-       if not self._data:
-           self._data = {}
-      
-       if 'replies' not in self._data or not isinstance(self._data['replies'], list):
-           self._data['replies'] = []
-      
-       # Attempt to include userName for frontend display
-       user_name = None
+       from model.user import User
+       if db.session.get(User, user_id) is None:
+           raise ValueError("Reply author not found")
+       reply = MicroBlogReply(microblog_id=self.id, user_id=user_id,
+                              content=reply_content, timestamp=datetime.utcnow())
        try:
-           from model.user import User
-           u = User.query.get(user_id)
-           user_name = u.name if u else None
-       except Exception:
-           user_name = None
-      
-       reply = {
-           'id': len(self._data['replies']) + 1,  # Simple incrementing ID
-           'userId': user_id,
-           'userName': user_name,
-           'content': reply_content,
-           'timestamp': datetime.utcnow().isoformat()
-       }
-      
-       self._data['replies'].append(reply)
-       self._updated_at = datetime.utcnow()
-      
-       flag_modified(self, '_data')
-      
-       try:
+           db.session.add(reply)
+           self._updated_at = datetime.utcnow()
            db.session.commit()
-           return reply
-       except Exception as e:
+           return reply.read()
+       except Exception:
            db.session.rollback()
-           raise e
+           raise
 
 
    def add_reaction(self, user_id, reaction_type):
-       """Add a reaction (like, heart, etc.) to the JSON data"""
-       if not self._data:
-           self._data = {}
-          
-       if 'reactions' not in self._data:
-           self._data['reactions'] = {}
-          
-       if reaction_type not in self._data['reactions']:
-           self._data['reactions'][reaction_type] = []
-          
-       # Remove user's previous reaction of this type if exists
-       self._data['reactions'][reaction_type] = [
-           uid for uid in self._data['reactions'][reaction_type] if uid != user_id
-       ]
-      
-       # Add new reaction
-       self._data['reactions'][reaction_type].append(user_id)
-       self._updated_at = datetime.utcnow()
-      
-       # CRITICAL: Mark the _data column as modified for SQLAlchemy
-       flag_modified(self, '_data')
-      
+       """Store authenticated reactions separately from client metadata."""
+       from model.user import User
+       if db.session.get(User, user_id) is None:
+           raise ValueError("Reaction author not found")
+       if not isinstance(reaction_type, str) or not reaction_type or len(reaction_type) > 50:
+           raise ValueError("Reaction type must be between 1 and 50 characters")
        try:
+           if not self.user_has_reacted(user_id, reaction_type):
+               db.session.add(MicroBlogReaction(microblog_id=self.id, user_id=user_id,
+                                                reaction_type=reaction_type))
+           self._updated_at = datetime.utcnow()
            db.session.commit()
-           db.session.refresh(self)
            return True
-       except Exception as e:
+       except Exception:
            db.session.rollback()
-           raise e
+           raise
 
 
    def remove_reaction(self, user_id, reaction_type):
-       """Remove a reaction from the JSON data"""
-       if not self._data or 'reactions' not in self._data:
+       reaction = db.session.get(MicroBlogReaction, (self.id, user_id, reaction_type))
+       if reaction is None:
            return False
-          
-       if reaction_type in self._data['reactions']:
-           self._data['reactions'][reaction_type] = [
-               uid for uid in self._data['reactions'][reaction_type] if uid != user_id
-           ]
+       try:
+           db.session.delete(reaction)
            self._updated_at = datetime.utcnow()
-          
-           flag_modified(self, '_data')
-          
-           try:
-               db.session.commit()
-               db.session.refresh(self)
-               return True
-           except Exception as e:
-               db.session.rollback()
-               raise e
-      
-       return False
-  
+           db.session.commit()
+           return True
+       except Exception:
+           db.session.rollback()
+           raise
+
+
    def get_reactions(self):
-       """Return reactions dictionary; empty dict if none or malformed."""
-       if not self._data or 'reactions' not in self._data or not isinstance(self._data['reactions'], dict):
-           return {}
-       return self._data['reactions']
+       reactions = {}
+       for reaction in MicroBlogReaction.query.filter_by(microblog_id=self.id).all():
+           reactions.setdefault(reaction.reaction_type, []).append(reaction.user_id)
+       return reactions
 
 
    def get_reaction_counts(self):
@@ -309,6 +285,41 @@ class MicroBlog(db.Model):
        microblogs = MicroBlog.query.filter(MicroBlog._content.contains(search_term)).order_by(MicroBlog._timestamp.desc()).limit(limit).all()
        return [microblog.read() for microblog in microblogs]
 
+
+
+
+class MicroBlogReply(db.Model):
+   """Replies with server-generated IDs/times and relational authorship."""
+   __tablename__ = 'microblog_replies'
+
+   id = db.Column(db.Integer, primary_key=True)
+   microblog_id = db.Column(db.Integer, db.ForeignKey('microblogs.id'), nullable=False, index=True)
+   user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+   content = db.Column(db.String(280), nullable=False)
+   timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+   user = db.relationship('User')
+   microblog = db.relationship('MicroBlog', backref=db.backref(
+       'reply_records', cascade='all, delete-orphan'))
+
+   def read(self):
+       return {
+           'id': self.id,
+           'userId': self.user_id,
+           'userName': self.user.name if self.user else 'Unknown',
+           'content': self.content,
+           'timestamp': self.timestamp.isoformat(),
+       }
+
+
+class MicroBlogReaction(db.Model):
+   """One reaction of each type per authenticated user and post."""
+   __tablename__ = 'microblog_reactions'
+
+   microblog_id = db.Column(db.Integer, db.ForeignKey('microblogs.id'), primary_key=True)
+   user_id = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
+   reaction_type = db.Column(db.String(50), primary_key=True)
+   microblog = db.relationship('MicroBlog', backref=db.backref(
+       'reaction_records', cascade='all, delete-orphan'))
 
 
 
@@ -631,8 +642,6 @@ def initMicroblogs():
                    "lessonProgress": "completed",
                    "rating": 5,
                    "hashtags": ["flask", "python", "webdev"],
-                   "reactions": {"👍": [], "🎉": []},
-                   "replies": []
                }
            },
            {
@@ -642,8 +651,6 @@ def initMicroblogs():
                    "helpRequested": True,
                    "difficulty": "medium",
                    "hashtags": ["javascript", "arrays", "help"],
-                   "reactions": {"🤔": [], "💡": []},
-                   "replies": []
                }
            },
            {
@@ -654,8 +661,6 @@ def initMicroblogs():
                    "features": ["dark-mode", "responsive"],
                    "seeking": "feedback",
                    "hashtags": ["portfolio", "react", "showcase"],
-                   "reactions": {"❤️": [], "🔥": []},
-                   "replies": []
                }
            },
            {
@@ -667,8 +672,6 @@ def initMicroblogs():
                    "blockers": [],
                    "mood": "productive",
                    "hashtags": ["standup", "progress"],
-                   "reactions": {"💪": []},
-                   "replies": []
                }
            },
            {
@@ -680,8 +683,6 @@ def initMicroblogs():
                    "subject": "javascript",
                    "recommendation": True,
                    "hashtags": ["resources", "javascript", "documentation"],
-                   "reactions": {"📚": [], "👍": []},
-                   "replies": []
                }
            }
        ]
