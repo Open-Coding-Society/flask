@@ -1,4 +1,13 @@
 {
+    "rest-client.environmentVariables": {
+        "$shared": {
+            "baseUrl": "http://127.0.0.1:8587"
+        },
+        "local": {},
+        "deployed": {
+            "baseUrl": "https://flask.opencodingsociety.com"
+        }
+    },
     "cSpell.words": [
         "Ahad",
         "Akshat",

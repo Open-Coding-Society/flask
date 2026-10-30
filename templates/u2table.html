@@ -5,6 +5,47 @@
 <div class="container mt-5">
     <h1>User Management</h1>
 
+    {% set is_staff = current_user.is_staff() %}
+
+    {% if is_staff %}
+    <div class="card mb-3" id="guestWindow">
+        <div class="card-body d-flex flex-wrap align-items-center gap-3">
+            <div>
+                <strong>Guest Window</strong>:
+                {% if guest_window_closes %}
+                <span class="text-success">open until <span id="guestWindowCloses" data-closes="{{ guest_window_closes }}"></span></span>
+                {% else %}
+                <span class="text-secondary">closed</span>. Guests cannot sign up or come back.
+                {% endif %}
+            </div>
+            <label class="mb-0">Open for
+                <input type="number" id="guestWindowMinutes" class="form-control d-inline-block w-auto" min="1" max="{{ guest_window_max }}" value="{{ [60, guest_window_max]|min }}"> minutes (up to {{ guest_window_max }})
+            </label>
+            <button type="button" class="btn btn-success" id="guestWindowOpen">Open</button>
+            <button type="button" class="btn btn-outline-secondary" id="guestWindowClose"{% if not guest_window_closes %} disabled{% endif %}>Close</button>
+            <button type="button" class="btn btn-danger" id="guestDisable">Disable all guests now</button>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if is_staff %}
+    <div class="d-flex flex-wrap align-items-center gap-3 mb-3" id="accountFilters">
+        <div class="btn-group" role="group" aria-label="Filter by status">
+            <button type="button" class="btn btn-outline-secondary active" data-status="all">All</button>
+            <button type="button" class="btn btn-outline-secondary" data-status="true">Active</button>
+            <button type="button" class="btn btn-outline-secondary" data-status="false">Inactive</button>
+        </div>
+        <label class="mb-0">Role:
+            <select id="roleFilter" class="form-select d-inline-block w-auto">
+                <option value="">All</option>
+                {% for role in user_data|map(attribute='role')|unique|sort %}
+                <option value="{{ role }}">{{ role }}</option>
+                {% endfor %}
+            </select>
+        </label>
+    </div>
+    {% endif %}
+
     <table class="table table-striped" id="userTable">
         <thead>
             <tr>
@@ -13,8 +54,8 @@
                 <th>Name</th>
                 <th>Email</th>
                 <th>Role</th>
+                <th>Status</th>
                 <th>Profile Picture</th>
-                <th>Kasm Server Needed</th>
                 <th>Courses</th>
                 <th>Commits</th>
                 <th>Actions</th>
@@ -22,13 +63,22 @@
         </thead>
         <tbody>
             {% for user in user_data %}
-            {% if user.id == current_user.id or current_user.role == 'Admin' %}
-            <tr id="user-{{ user.id }}">
+            {% if user.id == current_user.id or is_staff %}
+            <tr id="user-{{ user.id }}" data-role="{{ user.role }}" data-active="{{ 'true' if user.active else 'false' }}">
                 <td>{{ user.id }}</td>
                 <td>{{ user.uid }}</td>
                 <td>{{ user.name }}</td>
                 <td>{{ user.email }}</td>
                 <td>{{ user.role }}</td>
+                <td>
+                    {% if user.verification_state == 'active_verified' %}
+                    <span class="badge bg-success">Active</span>
+                    {% elif user.verification_state == 'active_verification_required' %}
+                    <span class="badge bg-warning text-dark">Active - verification required</span>
+                    {% else %}
+                    <span class="badge bg-secondary">Inactive</span>
+                    {% endif %}
+                </td>
                 <td>
                     {% if user.pfp %}
                     <img src="{{ url_for('uploaded_file', filename=user.uid + '/' + user.pfp) }}" 
@@ -42,7 +92,6 @@
                          style="width: 50px; height: 50px;">
                     {% endif %}
                 </td>
-                <td id="kasm-{{ user.id }}">{{ user.kasm_server_needed }}</td>
                 <td>
                     {% for section in user.sections %}
                     {{ section.abbreviation }}{% if not loop.last %}, {% endif %}
@@ -50,9 +99,21 @@
                 </td>
                 <td id="commits-{{ user.uid }}">Loading...</td>
                 <td>
-                    <button class="btn btn-primary edit-btn" data-id="{{ user.id }}">Edit</button>
-                    {% if current_user.role == 'Admin' %}
+                    {% if is_staff and user.role_editable_by(current_user) %}
+                    <button class="btn btn-primary edit-btn" data-uid="{{ user.uid }}" data-role="{{ user.role }}">Edit</button>
+                    {% endif %}
+                    {% if is_staff %}
+                    {% if user.verification_due %}
+                    <button class="btn btn-success status-btn" data-uid="{{ user.uid }}" data-action="verify"{% if user.verification_prompt_days %} data-prompt-days="{{ user.verification_prompt_days }}"{% endif %}>{{ 'Verify' if user.active else 'Activate' }}</button>
+                    {% endif %}
+                    {% if user.active and user.id != current_user.id and user.deactivation_blocker(current_user) is none %}
+                    <button class="btn btn-secondary status-btn" data-uid="{{ user.uid }}" data-action="deactivate">Deactivate</button>
+                    {% endif %}
+                    {% endif %}
+                    {% if current_user.is_admin() %}
+                    {% if user.deletion_blocker(current_user) is none %}
                     <button class="btn btn-danger delete-btn" data-id="{{ user.id }}">Delete</button>
+                    {% endif %}
                     <button class="btn btn-warning reset-password-btn" data-id="{{ user.id }}">Reset Password</button>
                     {% endif %}
                 </td>
@@ -63,12 +124,62 @@
     </table>
 </div>
 
+{% if is_staff %}
+<div class="modal fade" id="roleModal" tabindex="-1" aria-labelledby="roleModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="roleModalLabel">Change role</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <label for="roleSelect" class="form-label">New role for <strong id="roleModalUid"></strong></label>
+                <select id="roleSelect" class="form-select">
+                    {% for role in role_options %}
+                    <option value="{{ role }}">{{ role }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="roleSave">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <script>
     $(document).ready(function () {
         // Initialize DataTables
         const table =  $("#userTable").DataTable(); // repersents table
 
         table.page.len(-1).draw();  // shows all users and commits
+
+        // Filter by active state and role, read from each row's data attributes
+        let statusFilter = "all";
+        let roleFilter = "";
+        $.fn.dataTable.ext.search.push(function (settings, data, dataIndex) {
+            if (settings.nTable.id !== "userTable") return true;
+            const row = table.row(dataIndex).node();
+            const statusMatches = statusFilter === "all" || row.dataset.active === statusFilter;
+            const roleMatches = roleFilter === "" || row.dataset.role === roleFilter;
+            return statusMatches && roleMatches;
+        });
+        document.querySelectorAll("#accountFilters [data-status]").forEach(button => {
+            button.addEventListener("click", function () {
+                statusFilter = this.dataset.status;
+                document.querySelectorAll("#accountFilters [data-status]").forEach(b => b.classList.toggle("active", b === this));
+                table.draw();
+            });
+        });
+        const roleSelect = document.getElementById("roleFilter");
+        if (roleSelect) {
+            roleSelect.addEventListener("change", function () {
+                roleFilter = this.value;
+                table.draw();
+            });
+        }
         // Function to fetch commits (DISABLED)
         /*
         async function fetchAdminData(userUid) {
@@ -136,17 +247,103 @@
                     method: "DELETE",
                     headers: { "Content-Type": "application/json" },
                 })
-                    .then(response => response.json())
-                    .then(data => {
+                    .then(response => response.json().then(data => ({ ok: response.ok, data })))
+                    .then(({ ok, data }) => {
+                        if (!ok) throw new Error(data.error || data.message || "Could not delete the user.");
                         alert(data.message || "User deleted successfully.");
                         location.reload();
                     })
                     .catch(error => {
                         console.error("Error deleting user:", error);
-                        alert("Error deleting user.");
+                        alert(error.message || "Error deleting user.");
                     });
             });
         });
+
+        // Guest Window: open, close, or disable every guest at once
+        const guestWindowCloses = document.getElementById("guestWindowCloses");
+        if (guestWindowCloses) {
+            guestWindowCloses.textContent = new Date(guestWindowCloses.dataset.closes).toLocaleTimeString();
+        }
+        function guestRequest(url, method, body, confirmation) {
+            if (confirmation && !confirm(confirmation)) return;
+            const request = { method };
+            if (body) {
+                request.headers = { "Content-Type": "application/json" };
+                request.body = JSON.stringify(body);
+            }
+            fetch(url, request)
+                .then(response => response.json().then(data => ({ ok: response.ok, data })))
+                .then(({ ok, data }) => {
+                    if (!ok) throw new Error(data.message || "Request failed");
+                    location.reload();
+                })
+                .catch(error => alert(error.message || "Request failed."));
+        }
+        const guestOpen = document.getElementById("guestWindowOpen");
+        if (guestOpen) {
+            guestOpen.addEventListener("click", () => guestRequest("/api/guest/window", "POST",
+                { minutes: Number(document.getElementById("guestWindowMinutes").value) }));
+            document.getElementById("guestWindowClose").addEventListener("click", () => guestRequest("/api/guest/window", "DELETE"));
+            document.getElementById("guestDisable").addEventListener("click", () => guestRequest("/api/guest/disable", "POST", null,
+                "Close the Guest Window and make every guest inactive now?"));
+        }
+
+        // Handle activate / verify / deactivate
+        document.querySelectorAll(".status-btn").forEach(button => {
+            button.addEventListener("click", function () {
+                const { uid, action } = this.dataset;
+                if (action === "deactivate" && !confirm(`Deactivate ${uid}? They will be blocked until verified again.`)) return;
+                const request = { method: "POST" };
+                if (this.dataset.promptDays) {  // the number of days is the Teacher's or Admin's to choose
+                    const answer = prompt(`Verify ${uid} for how many days?`, this.dataset.promptDays);
+                    if (answer === null) return;
+                    request.headers = { "Content-Type": "application/json" };
+                    request.body = JSON.stringify({ days: Number(answer) });
+                }
+                fetch(`/api/user/${uid}/${action}`, request)
+                    .then(response => response.json().then(data => ({ ok: response.ok, data })))
+                    .then(({ ok, data }) => {
+                        if (!ok) throw new Error(data.message || "Request failed");
+                        location.reload();
+                    })
+                    .catch(error => {
+                        console.error("Error changing status:", error);
+                        alert(error.message || "Error changing status.");
+                    });
+            });
+        });
+
+        // Handle Edit: change an account's role
+        const roleModalElement = document.getElementById("roleModal");
+        if (roleModalElement) {
+            const roleModal = new bootstrap.Modal(roleModalElement);
+            let editingUid = null;
+            document.querySelectorAll(".edit-btn").forEach(button => {
+                button.addEventListener("click", function () {
+                    editingUid = this.dataset.uid;
+                    document.getElementById("roleModalUid").textContent = editingUid;
+                    document.getElementById("roleSelect").value = this.dataset.role;
+                    roleModal.show();
+                });
+            });
+            document.getElementById("roleSave").addEventListener("click", function () {
+                fetch(`/api/user/${editingUid}/role`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ role: document.getElementById("roleSelect").value })
+                })
+                    .then(response => response.json().then(data => ({ ok: response.ok, data })))
+                    .then(({ ok, data }) => {
+                        if (!ok) throw new Error(data.message || "Could not change the role");
+                        location.reload();
+                    })
+                    .catch(error => {
+                        console.error("Error changing role:", error);
+                        alert(error.message || "Error changing role.");
+                    });
+            });
+        }
 
         // Handle reset password action
         document.querySelectorAll(".reset-password-btn").forEach(button => {

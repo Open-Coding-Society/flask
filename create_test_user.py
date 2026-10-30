@@ -18,7 +18,7 @@ def create_test_user():
             print("❌ Test user 'testuser' already exists!")
             print(f"   Name: {existing_user.name}")
             print(f"   UID: {existing_user.uid}")
-            print(f"   Password: 123456")
+            print(f"   Password: Test123!")
             return
         
         # Create a new test user
@@ -26,7 +26,7 @@ def create_test_user():
         user = User(
             name="Test User",
             uid="testuser",
-            password="123456",  # Simple password for testing
+            password="Test123!",  # follows the password rule in model/user.py
             role="Student"
         )
         
@@ -37,7 +37,7 @@ def create_test_user():
         print("✅ TEST USER CREATED SUCCESSFULLY!")
         print("="*50)
         print(f"Username: testuser")
-        print(f"Password: 123456")
+        print(f"Password: Test123!")
         print(f"Name: Test User")
         print(f"Role: Student")
         print("="*50)

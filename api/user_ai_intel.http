@@ -1,0 +1,477 @@
+# ============================================================
+# VS Code REST Client - User Management API Test Cases
+# Created by ai.opencodingsociety.com AI Intelligence
+# ============================================================
+# Instructions:
+# 1. Set your environment variables below
+# 2. Run requests in order — many depend on prior steps
+# 3. Use the REST Client toolbar (▶ Send Request) buttons
+# ============================================================
+
+# Regular test user credentials
+@testUid = hop
+@testPassword = 123Hop!
+
+###############################################################
+# SECTION 1: AUTHENTICATION
+###############################################################
+
+### 1.02 Test user login — success (expect 200)
+### @name testUserLogin
+POST {{baseUrl}}/api/authenticate
+Content-Type: application/json
+
+{
+  "uid": "{{testUid}}",
+  "password": "{{testPassword}}"
+}
+
+### 1.03 Login — invalid password (expect 401)
+### @name loginInvalidPassword
+POST {{baseUrl}}/api/authenticate
+Content-Type: application/json
+
+{
+  "uid": "{{testUid}}",
+  "password": "wrongPassword123!"
+}
+
+### 1.04 Login — missing password (expect 401)
+### @name loginMissingPassword
+POST {{baseUrl}}/api/authenticate
+Content-Type: application/json
+
+{
+  "uid": "{{testUid}}"
+}
+
+### 1.05 Login — nonexistent uid (expect 401)
+### @name loginNonexistentUid
+POST {{baseUrl}}/api/authenticate
+Content-Type: application/json
+
+{
+  "uid": "does_not_exist_xyz",
+  "password": "somePassword123!"
+}
+
+### 1.06 Login — empty body (expect 400)
+### @name loginEmptyBody
+POST {{baseUrl}}/api/authenticate
+Content-Type: application/json
+
+{}
+
+### 1.07 Logout — invalidate admin token (expect 200)
+### @name adminLogout
+DELETE {{baseUrl}}/api/authenticate
+
+###############################################################
+# SECTION 2: CURRENT USER
+###############################################################
+
+### 2.01 Get current authenticated user — success (expect 200)
+### @name getCurrentUser
+GET {{baseUrl}}/api/id
+Accept: application/json
+
+###############################################################
+# SECTION 3: CREATE USER
+###############################################################
+
+### 3.01 Create user — success (expect 200)
+### @name createUserSuccess
+POST {{baseUrl}}/api/user
+Content-Type: application/json
+
+{
+  "uid": "wilma",
+  "name": "Wilma Flintstone",
+  "accountType": "student",
+  "email": "wilma@example.com"
+}
+
+### 3.02 Create user — missing name (expect 400)
+### @name createMissingName
+POST {{baseUrl}}/api/user
+Content-Type: application/json
+
+{
+  "uid": "test_no_name",
+  "accountType": "student"
+}
+
+### 3.03 Create user — name too short (expect 400)
+### @name createShortName
+POST {{baseUrl}}/api/user
+Content-Type: application/json
+
+{
+  "uid": "short_name_user",
+  "name": "X",
+  "accountType": "student"
+}
+
+### 3.04 Create user — missing uid (expect 400)
+### @name createMissingUid
+POST {{baseUrl}}/api/user
+Content-Type: application/json
+
+{
+  "name": "No UID User",
+  "accountType": "student"
+}
+
+### 3.05 Create user — uid too short (expect 400)
+### @name createShortUid
+POST {{baseUrl}}/api/user
+Content-Type: application/json
+
+{
+  "uid": "x",
+  "name": "Short UID User",
+  "accountType": "student"
+}
+
+### 3.06 Create user — password too short (expect 400)
+### @name createShortPassword
+POST {{baseUrl}}/api/user
+Content-Type: application/json
+
+{
+  "uid": "short_pw_user",
+  "name": "Short Password User",
+  "accountType": "student",
+  "password": "12345"
+}
+
+### 3.07 Create user — duplicate uid (expect 400)
+### @name createDuplicateUid
+POST {{baseUrl}}/api/user
+Content-Type: application/json
+
+{
+  "uid": "{{testUid}}",
+  "name": "Duplicate Wilma",
+  "accountType": "student"
+}
+
+###############################################################
+# SECTION 4: LIST USERS
+###############################################################
+
+### 4.01 List all users — success (expect 200)
+### @name listAllUsers
+GET {{baseUrl}}/api/user
+Accept: application/json
+
+### 4.02 List users — paginated (expect 200)
+### @name listUsersPaginated
+GET {{baseUrl}}/api/user?page=1&per_page=10
+Accept: application/json
+
+###############################################################
+# SECTION 5: UPDATE USER
+###############################################################
+
+### 5.01 Admin updates another user — success (expect 200)
+### @name adminUpdateUser
+PUT {{baseUrl}}/api/user
+Content-Type: application/json
+
+{
+  "uid": "{{testUid}}",
+  "name": "Wilma Flintstone Updated"
+}
+
+### 5.02 Admin updates self — success (expect 200)
+### @name adminUpdateSelf
+PUT {{baseUrl}}/api/user
+Content-Type: application/json
+
+{
+  "uid": "{{testUid}}",
+  "name": "Admin Updated Name"
+}
+
+### 5.03 Update nonexistent user — expect 404
+### @name updateNonexistent
+PUT {{baseUrl}}/api/user
+Content-Type: application/json
+
+{
+  "uid": "nonexistent_user_xyz",
+  "name": "Nobody"
+}
+
+###############################################################
+# SECTION 6: DELETE USER
+###############################################################
+
+### 6.01 Admin deletes user — success (expect 204)
+### @name deleteUserSuccess
+DELETE {{baseUrl}}/api/user
+Content-Type: application/json
+
+{
+  "uid": "{{testUid}}"
+}
+
+### 6.02 Delete nonexistent user — expect 404
+### @name deleteNonexistent
+DELETE {{baseUrl}}/api/user
+Content-Type: application/json
+
+{
+  "uid": "does_not_exist_xyz"
+}
+
+###############################################################
+# SECTION 7: BULK CREATE
+###############################################################
+
+### 7.01 Bulk create users — success (expect 200)
+### @name bulkCreateSuccess
+POST {{baseUrl}}/api/users
+Content-Type: application/json
+
+[
+  {
+    "uid": "bulk_user_1",
+    "name": "Bulk User One",
+    "sections": [{"abbreviation": "CSSE", "year": 2024}],
+    "class": ["CSSE"]
+  },
+  {
+    "uid": "bulk_user_2",
+    "name": "Bulk User Two",
+    "sections": [{"abbreviation": "CSP", "year": 2024}],
+    "class": ["CSP"]
+  }
+]
+
+### 7.02 Bulk create — not a list (expect 400)
+### @name bulkCreateNotList
+POST {{baseUrl}}/api/users
+Content-Type: application/json
+
+{"uid": "should_be_list"}
+
+###############################################################
+# SECTION 8: GUEST CREATION
+###############################################################
+
+### 8.01 Create guest user — success (expect 200)
+### @name createGuestSuccess
+POST {{baseUrl}}/api/user/guest
+Content-Type: application/json
+
+{
+  "uid": "guest_test_user",
+  "password": "GuestPass123!"
+}
+
+### 8.02 Create guest — missing uid (expect 400)
+### @name createGuestMissingUid
+POST {{baseUrl}}/api/user/guest
+Content-Type: application/json
+
+{
+  "password": "GuestPass123!"
+}
+
+### 8.03 Create guest — password too short (expect 400)
+### @name createGuestShortPassword
+POST {{baseUrl}}/api/user/guest
+Content-Type: application/json
+
+{
+  "uid": "guest_short",
+  "password": "12"
+}
+
+###############################################################
+# SECTION 9: ADMIN CREATE USER
+###############################################################
+
+### 9.01 Admin create user — success (expect 200)
+### @name adminCreateSuccess
+POST {{baseUrl}}/api/user/admin-create
+Content-Type: application/json
+
+{
+  "name": "Staff Created User",
+  "uid": "staff_create_test",
+  "password": "SecureStaffPass1!",
+  "accountType": "staff",
+  "email": "staff@example.com"
+}
+
+### 9.02 Admin create — invalid accountType (expect 400)
+### @name adminCreateInvalidType
+POST {{baseUrl}}/api/user/admin-create
+Content-Type: application/json
+
+{
+  "name": "Bad Type",
+  "uid": "bad_type_user",
+  "password": "SecurePass123!",
+  "accountType": "invalid_type"
+}
+
+###############################################################
+# SECTION 10: VERIFY ACCOUNT
+###############################################################
+
+### 10.01 Verify account — success (expect 200)
+### @name verifyAccountSuccess
+POST {{baseUrl}}/api/user/staff_create_test/verify
+Content-Type: application/json
+
+### 10.02 Verify nonexistent — expect 404
+### @name verifyNonexistent
+POST {{baseUrl}}/api/user/does_not_exist_xyz/verify
+Content-Type: application/json
+
+###############################################################
+# SECTION 11: SECTIONS
+###############################################################
+
+### 11.01 Get sections — empty (expect 200)
+### @name getSectionsEmpty
+GET {{baseUrl}}/api/user/section
+
+### 11.02 Add sections — success (expect 200)
+### @name addSections
+POST {{baseUrl}}/api/user/section
+Content-Type: application/json
+
+{
+  "sections": ["CSSE", "CSP"]
+}
+
+### 11.03 Add sections — empty list (expect 400)
+### @name addSectionsEmpty
+POST {{baseUrl}}/api/user/section
+Content-Type: application/json
+
+{
+  "sections": []
+}
+
+### 11.04 Update section year — success (expect 200)
+### @name updateSectionYear
+PUT {{baseUrl}}/api/user/section
+Content-Type: application/json
+
+{
+  "section": {
+    "abbreviation": "CSSE",
+    "year": 2025
+  }
+}
+
+### 11.05 Update section — missing abbrev (expect 400)
+### @name updateSectionMissingAbbrev
+PUT {{baseUrl}}/api/user/section
+Content-Type: application/json
+
+{
+  "section": {
+    "year": 2025
+  }
+}
+
+### 11.06 Delete sections — success (expect 200)
+### @name deleteSections
+DELETE {{baseUrl}}/api/user/section
+Content-Type: application/json
+
+{
+  "sections": ["CSSE", "CSP"]
+}
+
+###############################################################
+# SECTION 12: GRADE DATA
+###############################################################
+
+### 12.01 Get grade data (expect 200)
+### @name getGradeData
+GET {{baseUrl}}/api/grade_data
+
+### 12.02 Update grade data (expect 200)
+### @name updateGradeData
+POST {{baseUrl}}/api/grade_data
+Content-Type: application/json
+
+{
+  "grade_data": {
+    "math": 95,
+    "science": 88
+  }
+}
+
+### 12.03 Update grade data — missing field (expect 400)
+### @name updateGradeDataMissing
+POST {{baseUrl}}/api/grade_data
+Content-Type: application/json
+
+{}
+
+###############################################################
+# SECTION 13: AP EXAM DATA
+###############################################################
+
+### 13.01 Get AP exam data (expect 200)
+### @name getApExamData
+GET {{baseUrl}}/api/apexam
+
+### 13.02 Update AP exam data (expect 200)
+### @name updateApExamData
+POST {{baseUrl}}/api/apexam
+Content-Type: application/json
+
+{
+  "ap_exam": {
+    "AP_Computer_Science_A": {"score": 5, "year": 2024}
+  }
+}
+
+###############################################################
+# SECTION 14: SCHOOL DATA
+###############################################################
+
+### 14.01 Get school data (expect 200)
+### @name getSchoolData
+GET {{baseUrl}}/api/school
+
+### 14.02 Update school data (expect 200)
+### @name updateSchoolData
+POST {{baseUrl}}/api/school
+Content-Type: application/json
+
+{
+  "school": "Pebble Beach High School"
+}
+
+###############################################################
+# SECTION 15: PASSWORD RESET
+###############################################################
+
+### 15.01 Reset — missing fields (expect 400)
+### @name resetPasswordMissing
+POST {{baseUrl}}/api/reset-password
+Content-Type: application/json
+
+{"uid": "test"}
+
+### 15.02 Reset — short password (expect 400)
+### @name resetPasswordShort
+POST {{baseUrl}}/api/reset-password
+Content-Type: application/json
+
+{
+  "uid": "test",
+  "resetToken": "some-token",
+  "newPassword": "123"
+}

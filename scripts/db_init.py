@@ -22,75 +22,16 @@ General Process outline:
 3. Load Data: The bulk load API in "this" project inserts the data using required business logic.
 
 """
-import shutil
-import subprocess
 import sys
 import os
-from datetime import datetime
 
 # Add the directory containing main.py to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 # Import application object
 from main import app, db, generate_data
-
-BACKUP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'instance', 'backups'))
-
-
-def backup_mysql_database():
-    """mysqldump the production database before it is dropped.
-
-    Returns the dump path, or None if the dump could not be taken. This step
-    used to print "Backup not supported for production database" and continue
-    straight into drop_all(), leaving no rollback point at all.
-    """
-    if shutil.which('mysqldump') is None:
-        print("ERROR: mysqldump not found on PATH; cannot back up MySQL.")
-        return None
-
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    db_name = app.config['SQLALCHEMY_DATABASE_NAME']
-    dump_path = os.path.join(BACKUP_DIR, f"{db_name}_{timestamp}.sql")
-
-    cmd = [
-        'mysqldump',
-        f"--host={app.config['DB_ENDPOINT']}",
-        '--port=3306',
-        f"--user={app.config['DB_USERNAME']}",
-        '--single-transaction', '--routines', '--triggers',
-        db_name,
-    ]
-    env = dict(os.environ, MYSQL_PWD=app.config['DB_PASSWORD'])
-
-    print(f"Backing up MySQL database to {dump_path} ...")
-    with open(dump_path, 'w') as out:
-        result = subprocess.run(cmd, stdout=out, stderr=subprocess.PIPE, env=env)
-
-    if result.returncode != 0:
-        print(f"ERROR: mysqldump failed: {result.stderr.decode(errors='replace').strip()[:400]}")
-        if os.path.exists(dump_path):
-            os.remove(dump_path)
-        return None
-
-    size = os.path.getsize(dump_path)
-    print(f"MySQL database backed up to {dump_path} ({size} bytes)")
-    print(f"Roll back with: mysql -h {app.config['DB_ENDPOINT']} "
-          f"-u {app.config['DB_USERNAME']} -p {db_name} < {dump_path}")
-    return dump_path
-
-
-# Backup the old database
-def backup_database(db_uri, backup_uri):
-    """Backup the current database. Returns True when a rollback point exists."""
-    if backup_uri:
-        db_path = db_uri.replace('sqlite:///', 'instance/')
-        backup_path = backup_uri.replace('sqlite:///', 'instance/')
-        shutil.copyfile(db_path, backup_path)
-        print(f"Database backed up to {backup_path}")
-        return True
-
-    # No backup_uri means production MySQL.
-    return backup_mysql_database() is not None
+# The compare, backup and checks shared with db_upgrade.py
+import db_schema as schema
 
 # Main extraction and loading process
 def main():
@@ -104,6 +45,13 @@ def main():
             tables = inspector.get_table_names()
             
             if tables:
+                # Same decision db_upgrade.py makes, so a rebuild isn't run when it isn't needed.
+                to_create, missing = schema.compare()[:2]
+                path = schema.decide(to_create, schema.plan_columns(missing, {}))
+                if path == schema.CURRENT:
+                    print("Note: the database already matches the models; no rebuild is needed.")
+                elif path == schema.IN_PLACE:
+                    print("Note: scripts/db_upgrade.py can apply this schema change without dropping data.")
                 print("Warning, you are about to lose all data in the database!")
                 if os.getenv('FORCE_YES') == 'true':
                     response = 'y'
@@ -114,11 +62,8 @@ def main():
                     print("Exiting without making changes.")
                     sys.exit(0)
                     
-            # Backup the old database
-            backed_up = backup_database(
-                app.config['SQLALCHEMY_DATABASE_URI'],
-                app.config['SQLALCHEMY_BACKUP_URI'],
-            )
+            # Backup the old database (BACKUP_FILE: a dump taken on the host, as for db_upgrade.py)
+            backed_up = schema.take_backup("pre_init", os.getenv('BACKUP_FILE')) if tables else True
             if not backed_up and os.getenv('ALLOW_NO_BACKUP') != 'true':
                 print("\nRefusing to drop the database without a rollback point.")
                 print("Fix the backup above, or set ALLOW_NO_BACKUP=true to override.")
@@ -151,6 +96,13 @@ def main():
             
             # Add default test data 
             generate_data() # test data
+
+            # The same check db_upgrade.py runs after an in-place change.
+            problems = schema.verify_schema()
+            if problems:
+                print("FAILED: the rebuilt database does not match the models:"
+                      + "".join(f"\n  {p}" for p in problems))
+                sys.exit(1)
             
     except Exception as e:
         print(f"An error occurred: {e}")

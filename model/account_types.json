@@ -1,0 +1,49 @@
+{
+  "verification_interval_days": 365,
+  "admin_role": "Admin",
+  "essential_roles": ["Admin", "Teacher"],
+  "staff_roles": ["Teacher", "Admin"],
+  "default_verification_days": 30,
+  "verification_exempt_roles": ["Admin", "Teacher"],
+  "default_account_type": "student",
+  "account_types": {
+    "student": {
+      "role": "User",
+      "google_verified_domains": ["stu.powayusd.com"],
+      "staff_created": false
+    },
+    "mentor": {
+      "role": "Mentor",
+      "google_verified_domains": [],
+      "staff_created": true,
+      "verification_days": 365
+    },
+    "guest": {
+      "role": "Guest",
+      "google_verified_domains": [],
+      "staff_created": false,
+      "github_check": false,
+      "active_on_signup": true,
+      "lifetime_hours": 3,
+      "requires_open_window": true,
+      "window_max_minutes": 180,
+      "requests_per_minute": 60,
+      "allowed_requests": [
+        "GET /",
+        "GET /api/id",
+        "GET /login",
+        "POST /api/authenticate",
+        "POST /login",
+        "GET /logout",
+        "DELETE /api/authenticate",
+        "GET /api/microblog",
+        "POST /api/microblog",
+        "PUT /api/microblog",
+        "DELETE /api/microblog",
+        "POST /api/microblog/reply",
+        "POST /api/microblog/reaction",
+        "DELETE /api/microblog/reaction"
+      ]
+    }
+  }
+}
