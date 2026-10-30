@@ -1,5 +1,8 @@
 from __init__ import db
-from datetime import datetime
+from datetime import datetime, timedelta
+
+# A repeat of the same feedback inside this window is a double click, not new feedback.
+DUPLICATE_WINDOW = timedelta(minutes=1)
 
 class Feedback(db.Model):
     __tablename__ = 'feedbacks'
@@ -19,6 +22,14 @@ class Feedback(db.Model):
         self.type = type
         self.github_username = github_username
 
+
+    @staticmethod
+    def recent_duplicate(title, body, github_username):
+        """Return the same feedback from the same person sent within DUPLICATE_WINDOW, or None."""
+        since = datetime.utcnow() - DUPLICATE_WINDOW
+        return Feedback.query.filter_by(
+            title=title, body=body, github_username=github_username
+        ).filter(Feedback.created_at >= since).first()
 
     def create(self):
         db.session.add(self)
