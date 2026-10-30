@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Verify that db_upgrade.py adds missing columns in place, and refuses the unsafe ones.
+"""Verify both schema-change paths: db_upgrade.py adds missing columns in place and sends
+the rest to a rebuild, and db_init.py (the rebuild) takes the same backup and passes the same
+checks. Both paths run here every time, so the rarely used one can't break unnoticed.
 
 Builds a throwaway SQLite database with real accounts, removes columns and a table to give
 it an older shape, then runs db_upgrade.py against copies of it. Each run is its own
@@ -32,7 +34,7 @@ def sha256(path):
 
 
 def child():
-    """Runs in a subprocess: point the app at one database, then seed it or run db_upgrade."""
+    """Runs in a subprocess: point the app at one database, then seed it or run db_upgrade or db_init."""
     spec = json.loads(os.environ["VERIFY_DB_UPGRADE"])
     sys.path.insert(0, REPO)
     sys.path.insert(0, os.path.join(REPO, "scripts"))
@@ -61,15 +63,25 @@ def child():
             "foreign": sa.Column(name, sa.Integer, sa.ForeignKey("sections.id"), nullable=True),
             "timestamp": sa.Column(name, sa.DateTime, nullable=False, default=sa.func.now()),
         }[kind])
+    import db_schema
+    db_schema.BACKUP_DIR = spec["backups"]
+    if spec.get("verify_schema"):
+        with app.app_context():
+            print("\n".join(db_schema.verify_schema()))
+        return 0
+    if spec.get("init"):
+        os.environ["FORCE_YES"] = "true"
+        import db_init
+        db_init.main()
+        return 0
     import db_upgrade
-    db_upgrade.BACKUP_DIR = spec["backups"]
     if spec.get("break"):
-        real_plan = db_upgrade.plan_columns
+        real_plan = db_schema.plan_columns
         def broken_plan(missing, fills):
             plan = real_plan(missing, fills)
             plan["users"].append(("zz_broken", "ALTER TABLE no_such_table ADD COLUMN x INTEGER NULL", None))
             return plan
-        db_upgrade.plan_columns = broken_plan
+        db_schema.plan_columns = broken_plan
     sys.argv = ["db_upgrade.py"] + spec.get("args", [])
     return db_upgrade.main()
 
@@ -111,6 +123,11 @@ def main():
         shutil.copy(old, path)
         return path
 
+    # the shared after-change check catches a database that doesn't match the models
+    code, out = run(fresh("verify_schema.db"), backups=backups, verify_schema=True)
+    check("the shared schema check reports the missing table and columns", code == 0
+          and "table presence_events is missing" in out and "column users.active is missing" in out, out[-300:])
+
     # --check shows the SQL and changes nothing
     db = fresh("check.db")
     before = sha256(db)
@@ -139,13 +156,30 @@ def main():
     code, out = run(db, backups=backups, args=["--check"])
     check("--check shows existing rows would get active = 0", "ADD COLUMN active BOOLEAN DEFAULT 0 NOT NULL" in out)
 
-    # refused, changing nothing
+    # can't be added in place: sent to the rebuild, changing nothing
     for kind in ("required", "unique", "foreign", "timestamp"):
         db = fresh(f"refuse_{kind}.db")
         before = sha256(db)
         code, out = run(db, backups=backups, extra=[["zz_new", kind]])
-        check(f"refuses a {kind} column", code == 1 and "CANNOT ADD" in out and "users.zz_new" in out, out[-300:])
-        check(f"refusing a {kind} column changes nothing", sha256(db) == before)
+        check(f"a {kind} column needs a rebuild (exit 3)",
+              code == 3 and "CANNOT ADD" in out and "Rebuild needed: users.zz_new" in out and "db_init.py" in out, out[-300:])
+        check(f"a {kind} column changes nothing", sha256(db) == before)
+    code, out = run(fresh("check_rebuild.db"), backups=backups, extra=[["zz_new", "unique"]], args=["--check"])
+    check("--check exits 3 when a rebuild is needed", code == 3 and "Rebuild needed" in out, out[-300:])
+
+    # the rebuild path, db_init.py: same decision, same backup, same checks
+    init_backups = os.path.join(tmp, "init_backups")
+    db = fresh("init_inplace.db")
+    code, out = run(db, backups=init_backups, init=True)
+    check("db_init rebuilds the old shape and passes the shared schema check", code == 0
+          and {"active", "last_verified", "token_version"} <= columns(db, "users"), out[-400:])
+    check("db_init says the change could be applied in place", "db_upgrade.py can apply this" in out, out[-400:])
+    check("db_init takes the shared rollback point first",
+          os.path.isdir(init_backups) and any("pre_init" in f for f in os.listdir(init_backups)))
+    code, out = run(fresh("init_rebuild.db"), backups=init_backups, init=True, extra=[["zz_new", "unique"]])
+    check("db_init rebuilds a change that needs it, without the in-place note",
+          code == 0 and "zz_new" in columns(os.path.join(tmp, "init_rebuild.db"), "users")
+          and "db_upgrade.py can apply" not in out, out[-400:])
 
     # --fill makes a NOT NULL column with no fixed default addable
     for kind, value in (("required", "x"), ("timestamp", "2026-01-30 00:00:00")):
