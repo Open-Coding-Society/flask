@@ -1,11 +1,16 @@
+import base64
+import hashlib
 import hmac
 import jwt
+import threading
 from flask import Blueprint, app, request, jsonify, current_app, Response, g
 from flask_restful import Api, Resource # used for REST API building
 from datetime import datetime, timedelta
 from __init__ import app, db
 from api.authorize import token_required
-from model.user import User
+from model.user import User, meets_password_rule, WeakPasswordError
+from model import account_types, guest_window
+from model.google_token import verified_google_email
 from model.github import GitHubUser
 import os
 
@@ -14,6 +19,73 @@ user_api = Blueprint('user_api', __name__,
 
 # API docs https://flask-restful.readthedocs.io/en/latest/api.html
 api = Api(user_api)
+
+# Tokens this process has already spent, so a captured token can't be replayed against
+# Flask again within its own TTL -- Spring enforces single-use on its side too (consumed
+# when the frontend calls /reset/oauth/complete), but that's a separate record Flask has
+# no visibility into, so this endpoint needs its own. Keyed by the full token string;
+# swept lazily since each entry's own expiry means it's safe to forget once that time
+# passes -- nobody can replay an expired token anyway.
+_consumed_reset_tokens = {}
+_consumed_reset_tokens_lock = threading.Lock()
+
+
+def _verify_reset_token(uid, token):
+    """Verifies a password-reset token issued by Spring's ResetCode.java, entirely
+    locally -- no network call back to Spring. Same HMAC-SHA256 scheme on both
+    sides, keyed by the RESET_TOKEN_SECRET both backends are independently
+    configured with: token = base64url(uid) + "." + expiresAt + "." + nonce + "."
+    + signature, where signature = HMAC-SHA256(secret, f"{uid}.{expiresAt}.{nonce}").
+    Signature + expiry only -- callers that need single-use enforcement (this file's
+    reset-password endpoint) must check/record consumption themselves.
+    """
+    if not uid or not token:
+        return False, None
+
+    parts = token.split('.')
+    if len(parts) != 4:
+        return False, None
+    _uid_b64, exp_str, nonce, signature = parts
+
+    try:
+        exp = int(exp_str)
+    except ValueError:
+        return False, None
+    if datetime.utcnow().timestamp() > exp:
+        return False, None
+
+    secret = current_app.config.get('RESET_TOKEN_SECRET')
+    if not secret:
+        return False, None
+
+    payload = f"{uid}.{exp}.{nonce}".encode('utf-8')
+    expected_sig = base64.urlsafe_b64encode(
+        hmac.new(secret.encode('utf-8'), payload, hashlib.sha256).digest()
+    ).decode('utf-8').rstrip('=')
+
+    return hmac.compare_digest(expected_sig, signature), exp
+
+
+def _consume_reset_token(uid, token):
+    """Verifies the token (signature + expiry) and, only if it hasn't been spent
+    against this endpoint before, marks it spent and returns True. Single-use
+    enforcement local to Flask -- see _verify_reset_token's docstring."""
+    valid, exp = _verify_reset_token(uid, token)
+    if not valid:
+        return False
+
+    now = datetime.utcnow().timestamp()
+    with _consumed_reset_tokens_lock:
+        for stored_token, stored_exp in list(_consumed_reset_tokens.items()):
+            if stored_exp <= now:
+                del _consumed_reset_tokens[stored_token]
+
+        if token in _consumed_reset_tokens:
+            return False
+
+        _consumed_reset_tokens[token] = exp
+        return True
+
 
 def _without_password(user_data):
     """Strip the password hash before a user dict goes out over a general-purpose
@@ -38,6 +110,7 @@ class UserAPI:
             return jsonify(user_data)
     
     class _BULK(Resource):  # Users API operation for Create, Read, Update, Delete 
+        @token_required(account_types.admin_role())
         def post(self):
             ''' Handle bulk user creation by sending POST requests to the single user endpoint '''
             users = request.get_json()
@@ -105,20 +178,34 @@ class UserAPI:
             if uid is None or len(uid) < 2:
                 return {'message': f'User ID is missing, or is less than 2 characters'}, 400
           
-            # check if uid is a GitHub account
-            _, status = GitHubUser().get(uid)
-            if status != 200:
-                return {'message': f'User ID {uid} not a valid GitHub account' }, 404
+            # The account type (see model/account_types.json) sets the role. A type with Google
+            # domains is activated only when Google verifies an email in them for the submitted
+            # token; a type that is active on sign-up (a guest) is activated at once; any other
+            # type stays inactive until a Teacher/Admin verifies it.
+            account_type = account_types.get(body.get('accountType'))
+            if account_types.requires_open_window(account_type) and not guest_window.is_open():
+                return {'message': 'Guest sign-up is closed right now. Ask a teacher to open the Guest Window.'}, 403
+            if body.get('password') is None and not account_types.needs_github_check(account_type):
+                return {'message': 'A password is required'}, 400
+
+            # check if uid is a GitHub account, unless the account type does not need one
+            if account_types.needs_github_check(account_type):
+                _, status = GitHubUser().get(uid)
+                if status != 200:
+                    return {'message': f'User ID {uid} not a valid GitHub account' }, 404
             
             ''' User object creation '''
+            role = account_type['role']
+            domains = account_type['google_verified_domains']
+            verified_email = verified_google_email(body.get('idToken'), domains) if domains else None
+
             #1: Setup minimal User object using __init__ method
             password = body.get('password')
             if password is not None:
-                if len(password) < 8 and not password.startswith("pbkdf2:sha256:"):
-                    return {'message': 'Password must be at least 8 characters'}, 400
-                user_obj = User(name=name, uid=uid, password=password)
+                # The model rejects a password that breaks the rule (WeakPasswordError -> 400).
+                user_obj = User(name=name, uid=uid, password=password, role=role)
             else:
-                user_obj = User(name=name, uid=uid)
+                user_obj = User(name=name, uid=uid, role=role)
             
             # Handle additional fields that frontend sends
             # Create a cleaned body with only the fields User model expects
@@ -134,8 +221,6 @@ class UserAPI:
                 cleaned_body['sid'] = body.get('sid')
             if body.get('school'):
                 cleaned_body['school'] = body.get('school')
-            if body.get('kasm_server_needed') is not None:
-                cleaned_body['kasm_server_needed'] = body.get('kasm_server_needed')
             # Support assigning classes (e.g. ["CSSE","CSP","CSA"]).
             # Accept either a list or a single string.
             if body.get('class') is not None:
@@ -158,10 +243,16 @@ class UserAPI:
                     # Check if user was actually created in database despite create() returning None
                     db_user = User.query.filter_by(_uid=uid).first()
                     if db_user:
+                        if not account_types.needs_github_check(account_type):
+                            # an open sign-up (a guest): say it is taken, and show nothing about the account
+                            return {'message': f'User ID {uid} already exists. Log in with it to come back.'}, 409
                         #print(f"User exists in DB but create returned None: {db_user.uid}")
                         return jsonify(_without_password(db_user.read()))  # Return the user anyway
                     else:
                         return {'message': f'Processed {name}, either a format error or User ID {uid} is duplicate'}, 400
+
+                if verified_email or account_types.active_on_signup(account_type):
+                    user.activate()
 
                 #print(f"Successfully created user: {user.uid}")
                 # return response, the created user details as a JSON object
@@ -211,7 +302,7 @@ class UserAPI:
             for user in users:
                 user_data = _without_password(user.read())
                 # Add access control
-                if current_user.role == 'Admin' or current_user.id == user.id:
+                if current_user.is_admin() or current_user.id == user.id:
                     user_data['access'] = ['rw'] # read-write access control 
                 else:
                     user_data['access'] = ['ro'] # read-only access control 
@@ -249,7 +340,7 @@ class UserAPI:
             body = request.get_json()
 
             ''' Admin-specific update handling '''
-            if current_user.role == 'Admin':
+            if current_user.is_admin():
                 uid = body.get('uid')
                 # Admin is updating themself
                 if uid is None or uid == current_user.uid:
@@ -275,7 +366,7 @@ class UserAPI:
             # return response, the updated user details as a JSON object
             return jsonify(_without_password(user.read()))
         
-        @token_required("Admin")
+        @token_required(account_types.admin_role())
         def delete(self):
             """
             Delete a user.
@@ -294,7 +385,11 @@ class UserAPI:
             # bad request
             if user is None:
                 return {'message': f'User {uid} not found'}, 404
-           
+
+            blocker = user.deletion_blocker(g.current_user)
+            if blocker:
+                return {'message': blocker[1]}, blocker[0]
+
             # Read and then Delete the User object using custom methods
             user_json = _without_password(user.read())
             user.delete()
@@ -397,6 +492,14 @@ class UserAPI:
                 if user is None or not user.is_password(password):
                     
                     return {'message': f"Invalid user id or password"}, 401
+
+                if user.expired():
+                    # A guest whose time has passed comes back only while the Guest Window is open
+                    if not account_types.role_requires_open_window(user.role):
+                        return {'message': 'This account has expired'}, 403
+                    if not guest_window.is_open():
+                        return {'message': 'This account has expired, and the Guest Window is closed. Ask a teacher to open it.'}, 403
+                    user.activate()
                             
                 # Check if user is found
                 if user:
@@ -417,6 +520,7 @@ class UserAPI:
                         # Return JSON response with cookie
                         is_production = os.environ.get('IS_PRODUCTION', 'false').lower() == 'true'
                         
+                        state = user.verification_state
                         # Create JSON response
                         response_data = {
                             "message": f"Authentication for {user._uid} successful",
@@ -424,7 +528,12 @@ class UserAPI:
                                 "uid": user._uid,
                                 "name": user.name,
                                 "role": user.role,
-                                "class": user._class if getattr(user, '_class', None) is not None else []
+                                "class": user._class if getattr(user, '_class', None) is not None else [],
+                                "active": user.active,
+                                "verification_state": state,
+                                "verification_required": state == "active_verification_required",
+                                "verified_by_google": bool(account_types.google_domains(user.role)),
+                                "limited": account_types.allowed_requests(user.role) is not None
                             }
                         }
                         resp = jsonify(response_data)
@@ -530,7 +639,7 @@ class UserAPI:
             
             # If request includes a UID parameter and user is admin, get that user's grade data
             uid = request.args.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
@@ -549,13 +658,13 @@ class UserAPI:
             
             # Determine which user's grade data to update
             uid = body.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
             else:
                 # Non-admins can only update their own grade data
-                if uid and uid != current_user.uid and current_user.role != 'Admin':
+                if uid and uid != current_user.uid and not current_user.is_admin():
                     return {'message': 'Permission denied: You can only update your own grade data'}, 403
                 user = current_user
             
@@ -583,7 +692,7 @@ class UserAPI:
             
             # If request includes a UID parameter and user is admin, get that user's AP exam data
             uid = request.args.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
@@ -602,13 +711,13 @@ class UserAPI:
             
             # Determine which user's AP exam data to update
             uid = body.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
             else:
                 # Non-admins can only update their own AP exam data
-                if uid and uid != current_user.uid and current_user.role != 'Admin':
+                if uid and uid != current_user.uid and not current_user.is_admin():
                     return {'message': 'Permission denied: You can only update your own AP exam data'}, 403
                 user = current_user
             
@@ -636,7 +745,7 @@ class UserAPI:
 
             # If request includes a UID parameter and user is admin, get that user's school data
             uid = request.args.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
@@ -655,13 +764,13 @@ class UserAPI:
 
             # Determine which user's school data to update
             uid = body.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
             else:
                 # Non-admins can only update their own school data
-                if uid and uid != current_user.uid and current_user.role != 'Admin':
+                if uid and uid != current_user.uid and not current_user.is_admin():
                     return {'message': 'Permission denied: You can only update your own school data'}, 403
                 user = current_user
 
@@ -698,10 +807,8 @@ class UserAPI:
             if uid is None or len(uid) < 2:
                 return {'message': 'Username is missing, or is less than 2 characters'}, 400
 
-            # Validate password (relaxed requirement for guests)
+            # Guests follow the same password rule as everyone else (checked in the model)
             password = body.get('password')
-            if password is None or len(password) < 2:
-                return {'message': 'Password is missing, or is less than 2 characters'}, 400
 
             # Auto-generate required fields for guest accounts
             name = f"Guest_{uid}"
@@ -720,7 +827,6 @@ class UserAPI:
                 'email': email,
                 'sid': sid,
                 'school': school,
-                'kasm_server_needed': False
             }
             if body.get('class') is not None:
                 cleaned_body['class'] = body.get('class')
@@ -743,36 +849,174 @@ class UserAPI:
             except Exception as e:
                 return {'message': f'Error creating guest user: {str(e)}'}, 500
 
-    class _InternalPasswordSync(Resource):
+    class _ResetPasswordVerified(Resource):
         """
-        Server-to-server password sync, called by the Spring backend after a
-        password reset completes there, so the same account's Flask password
-        stays in sync. Not reachable via a browser session -- gated by a shared
-        secret (INTERNAL_SYNC_KEY) instead of user auth.
+        Sets this uid's Flask password using a short-lived, single-use token
+        issued by Spring's POST /mvc/person/reset/oauth/verify. Called directly
+        by the frontend, not by Spring -- Flask verifies the token's HMAC
+        signature and expiry itself (RESET_TOKEN_SECRET, shared with Spring but
+        never sent over the wire between the two backends), so there is no
+        Spring -> Flask network call. Flask is the source of truth for this
+        password write; the frontend syncs Spring's copy separately afterward by
+        calling Spring's /reset/oauth/complete with the same token.
         """
         def post(self):
-            sync_key = current_app.config.get('INTERNAL_SYNC_KEY')
-            provided_key = request.headers.get('X-Internal-Sync-Key')
-            if not sync_key or not provided_key or not hmac.compare_digest(provided_key, sync_key):
-                return {'message': 'Unauthorized'}, 401
-
             body = request.get_json(silent=True) or {}
             uid = body.get('uid')
-            password = body.get('password')
+            reset_token = body.get('resetToken')
+            password = body.get('newPassword')
 
-            if not uid or not password:
-                return {'message': 'uid and password are required'}, 400
-            if len(password) < 8:
-                return {'message': 'Password must be at least 8 characters'}, 400
+            if not uid or not reset_token or not password:
+                return {'message': 'uid, resetToken, and newPassword are required'}, 400
+            # Check the rule before the single-use token gets spent on a weak password
+            if not meets_password_rule(password):
+                raise WeakPasswordError()
+            if not _consume_reset_token(uid, reset_token):
+                return {'message': 'Invalid, expired, or already-used reset token'}, 403
 
             user = User.query.filter_by(_uid=uid).first()
             if user is None:
                 return {'message': f'User {uid} not found'}, 404
 
-            user.update({'password': password})
-            return {'message': f'Password synced for {uid}'}, 200
+            updated = user.update({'password': password})
+            if updated is None:
+                # update() returns None on IntegrityError (already rolled back internally).
+                return {'message': f'Failed to reset password for {uid}'}, 500
+            return {'message': f'Password reset for {uid}'}, 200
+
+    class _VerifyAccount(Resource):
+        """Teacher/Admin verifies any account: marks it active and records last_verified.
+        How long that covers is fixed for some roles (see model/account_types.json); for the
+        others the optional JSON body {"days": N} says (1 up to the full interval), and
+        default_verification_days applies when it is left out."""
+        @token_required(account_types.staff_roles())
+        def post(self, uid):
+            target = User.query.filter_by(_uid=uid).first()
+            if target is None:
+                return {'message': f'User {uid} not found'}, 404
+            if account_types.allowed_requests(target.role) is not None:
+                # verifying would restart, or end, the few hours a limited account (a guest) lasts
+                return {'message': 'This type of account cannot be verified'}, 400
+            days = account_types.fixed_verification_days(target.role)
+            if days is None:
+                body = request.get_json(silent=True)
+                if body is not None and not isinstance(body, dict):
+                    return {'message': 'The body must be a JSON object such as {"days": 30}'}, 400
+                days = (body or {}).get('days', account_types.default_verification_days())
+            interval = account_types.verification_interval_days()
+            if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= interval:
+                return {'message': f'days must be a whole number from 1 to {interval}'}, 400
+            return jsonify(_without_password(target.activate(days).read()))
+
+    class _DeactivateAccount(Resource):
+        """Teacher/Admin marks an account inactive. The account and its data are kept."""
+        @token_required(account_types.staff_roles())
+        def post(self, uid):
+            target = User.query.filter_by(_uid=uid).first()
+            if target is None:
+                return {'message': f'User {uid} not found'}, 404
+            blocker = target.deactivation_blocker(g.current_user)
+            if blocker:
+                return {'message': blocker[1]}, blocker[0]
+            return jsonify(_without_password(target.deactivate().read()))
+
+    class _ChangeRole(Resource):
+        """Teacher/Admin changes another account's role: POST {"role": <a role from account_types.json>}. Only an Admin can
+        make someone an Admin or change an Admin's role; nobody changes their own role."""
+        @token_required(account_types.staff_roles())
+        def post(self, uid):
+            target = User.query.filter_by(_uid=uid).first()
+            if target is None:
+                return {'message': f'User {uid} not found'}, 404
+            body = request.get_json(silent=True)
+            role = body.get('role') if isinstance(body, dict) else None
+            blocker = target.role_change_blocker(g.current_user, role)
+            if blocker:
+                return {'message': blocker[1]}, blocker[0]
+            target.role = role
+            db.session.commit()
+            return jsonify(_without_password(target.read()))
+
+    class _Reverify(Resource):
+        """A student whose verification has lapsed verifies again with school Google sign-in:
+        POST {"idToken": ...}. Every other account is verified by a Teacher or Admin."""
+        @token_required()
+        def post(self):
+            user = g.current_user
+            domains = account_types.google_domains(user.role)
+            if not domains:
+                return {'message': 'A Teacher or Admin verifies this account'}, 403
+            if user.verification_state != "active_verification_required":
+                return {'message': 'No verification is due'}, 409
+            body = request.get_json(silent=True)
+            if not isinstance(body, dict):
+                return {'message': 'The body must be a JSON object such as {"idToken": "..."}'}, 400
+            if not verified_google_email(body.get('idToken'), domains):
+                return {'message': 'Google could not verify a school account from this sign-in'}, 403
+            return jsonify(_without_password(user.activate().read()))
+
+    class _AdminCreate(Resource):
+        """Teacher/Admin creates an account of a staff-created type (see
+        model/account_types.json). The account starts inactive and follows the same
+        verification step as a self-created one."""
+        @token_required(account_types.staff_roles())
+        def post(self):
+            body = request.get_json(silent=True) or {}
+            allowed = account_types.staff_created()
+            role = allowed.get((body.get('accountType') or '').lower())
+            name, uid, password = body.get('name'), body.get('uid'), body.get('password')
+            if role is None:
+                return {'message': f"accountType must be one of: {', '.join(allowed)}"}, 400
+            if not name or not uid or not password:
+                return {'message': 'name, uid and password are required'}, 400
+            user = User(name=name, uid=uid, password=password, role=role).create(
+                {'email': body['email']} if body.get('email') else None)
+            if not user:
+                return {'message': f'User ID {uid} is a duplicate or invalid'}, 400
+            return jsonify(_without_password(user.read()))
 
     # building RESTapi endpoint
+    class _GuestWindow(Resource):
+        """The Guest Window (see model/guest_window.py). Anyone can ask whether it is open. A
+        Teacher/Admin opens it with {"minutes": N}, N up to window_max_minutes in
+        model/account_types.json, and can close it at any time."""
+        def get(self):
+            closes = guest_window.closes_at()
+            return {'open': closes is not None, 'closes_at': None if closes is None else closes.isoformat()}
+
+        @token_required(account_types.staff_roles())
+        def post(self):
+            body = request.get_json(silent=True)
+            minutes = body.get('minutes') if isinstance(body, dict) else None
+            longest = account_types.window_max_minutes()
+            if not isinstance(minutes, int) or isinstance(minutes, bool) or not 1 <= minutes <= longest:
+                return {'message': f'minutes must be a whole number from 1 to {longest}'}, 400
+            closes = guest_window.open_for(minutes)
+            # %r quotes the uid, so a newline in it cannot forge a second log line
+            current_app.logger.info("AUDIT guest window opened by uid=%r for %d minutes", g.current_user.uid, minutes)
+            return {'open': True, 'closes_at': closes.isoformat()}
+
+        @token_required(account_types.staff_roles())
+        def delete(self):
+            guest_window.close()
+            current_app.logger.info("AUDIT guest window closed by uid=%r", g.current_user.uid)
+            return {'open': False, 'closes_at': None}
+
+    class _GuestDisable(Resource):
+        """Teacher/Admin turns guest access off at once: closes the Guest Window and makes every
+        active guest inactive, so each is refused from their next request. The records are kept,
+        and a guest can come back in a later window."""
+        @token_required(account_types.staff_roles())
+        def post(self):
+            guest_window.close()
+            guests = User.query.filter(User._role.in_(account_types.guest_roles()), User.active.is_(True)).all()
+            for guest in guests:
+                guest.active = False
+                guest.last_verified = None  # so coming back counts as returning after the time has passed
+            db.session.commit()
+            current_app.logger.info("AUDIT guest access disabled by uid=%r, %d guest accounts made inactive", g.current_user.uid, len(guests))
+            return {'open': False, 'closes_at': None, 'disabled': len(guests)}
+
     api.add_resource(_ID, '/id')
     api.add_resource(_BULK, '/users')
     api.add_resource(_CRUD, '/user')
@@ -782,7 +1026,14 @@ class UserAPI:
     api.add_resource(_GradeData, '/grade_data')
     api.add_resource(_APExam, '/apexam')
     api.add_resource(_School, '/school')
-    api.add_resource(_InternalPasswordSync, '/internal/sync-password')
+    api.add_resource(_ResetPasswordVerified, '/reset-password')
+    api.add_resource(_VerifyAccount, '/user/<string:uid>/verify')
+    api.add_resource(_DeactivateAccount, '/user/<string:uid>/deactivate')
+    api.add_resource(_ChangeRole, '/user/<string:uid>/role')
+    api.add_resource(_Reverify, '/user/reverify')
+    api.add_resource(_AdminCreate, '/user/admin-create')
+    api.add_resource(_GuestWindow, '/guest/window')
+    api.add_resource(_GuestDisable, '/guest/disable')
     
     class _Class(Resource):
         """Manage the user's `class` list (e.g. CSSE, CSP, CSA).
@@ -795,7 +1046,7 @@ class UserAPI:
         def get(self):
             current_user = g.current_user
             uid = request.args.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
@@ -810,7 +1061,7 @@ class UserAPI:
             current_user = g.current_user
             body = request.get_json() or {}
             uid = body.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404
@@ -854,7 +1105,7 @@ class UserAPI:
             current_user = g.current_user
             body = request.get_json() or {}
             uid = body.get('uid')
-            if current_user.role == 'Admin' and uid:
+            if current_user.is_admin() and uid:
                 user = User.query.filter_by(_uid=uid).first()
                 if not user:
                     return {'message': f'User {uid} not found'}, 404

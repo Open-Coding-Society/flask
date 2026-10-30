@@ -17,6 +17,9 @@ app = Flask(__name__)
 # Configure Flask Port, default to 8587 which is same as Docker setup
 app.config['FLASK_PORT'] = int(os.environ.get('FLASK_PORT') or 8587)
 
+# Configure Code Runner port, default 8591
+app.config['RUNNER_PORT'] = int(os.environ.get('RUNNER_PORT') or 8591)
+
 # Configure Flask to handle JSON with UTF-8 encoding versus default ASCII
 app.config['JSON_AS_ASCII'] = False  # Allow emojis, non-ASCII characters in JSON responses
 
@@ -53,28 +56,33 @@ cors = CORS(
 # Admin Defaults
 app.config['ADMIN_USER'] = os.environ.get('ADMIN_USER') or 'Admin Name'
 app.config['ADMIN_UID'] = os.environ.get('ADMIN_UID') or 'admin'
-app.config['ADMIN_PASSWORD'] = os.environ.get('ADMIN_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or 'password'
+app.config['ADMIN_PASSWORD'] = os.environ.get('ADMIN_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or '123Qwerty!'
 app.config['ADMIN_PFP'] = os.environ.get('ADMIN_PFP') or 'default.png'
 # Teacher Defaults
 app.config['TEACHER_USER'] = os.environ.get('TEACHER_USER') or 'Teacher Name'
 app.config['TEACHER_UID'] = os.environ.get('TEACHER_UID') or 'teacher'
-app.config['TEACHER_PASSWORD'] = os.environ.get('TEACHER_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or 'password'
+app.config['TEACHER_PASSWORD'] = os.environ.get('TEACHER_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or '123Qwerty!'
 app.config['TEACHER_PFP'] = os.environ.get('TEACHER_PFP') or 'default.png'
 # Default User Defaults
 app.config['USER_NAME'] = os.environ.get('USER_NAME') or 'User Name'
 app.config['USER_UID'] = os.environ.get('USER_UID') or 'user'
-app.config['USER_PASSWORD'] = os.environ.get('USER_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or 'password'
+app.config['USER_PASSWORD'] = os.environ.get('USER_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or '123Qwerty!'
 app.config['USER_PFP'] = os.environ.get('USER_PFP') or 'default.png'
 # Defaults
-app.config['DEFAULT_PASSWORD'] = os.environ.get('DEFAULT_PASSWORD') or 'password'
+app.config['DEFAULT_PASSWORD'] = os.environ.get('DEFAULT_PASSWORD') or '123Qwerty!'  # must follow the password rule in model/user.py
 app.config['DEFAULT_PFP'] = os.environ.get('DEFAULT_PFP') or 'default.png'
-# Shared secret for server-to-server calls from Spring (e.g. password sync after
-# an OAuth-verified reset). No default -- unset means the sync endpoint is closed.
-app.config['INTERNAL_SYNC_KEY'] = os.environ.get('INTERNAL_SYNC_KEY')
+# Signing secret for password-reset tokens issued by Spring's ResetCode.java.
+# Must match RESET_TOKEN_SECRET in the spring repo's .env -- Flask verifies these
+# tokens locally (no call back to Spring). No default -- unset means the
+# frontend-driven reset-password endpoint is closed.
+app.config['RESET_TOKEN_SECRET'] = os.environ.get('RESET_TOKEN_SECRET')
+# OAuth client ID a student's Google ID token must be issued for. No default: unset means
+# no signup is auto-activated.
+app.config['GOOGLE_CLIENT_ID'] = os.environ.get('GOOGLE_CLIENT_ID')
 # Convenience user
 app.config['MY_NAME'] = os.environ.get('MY_NAME') or 'convenience'
 app.config['MY_UID'] = os.environ.get('MY_UID') or 'convenience'
-app.config['MY_PASSWORD'] = os.environ.get('MY_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or 'password'
+app.config['MY_PASSWORD'] = os.environ.get('MY_PASSWORD') or os.environ.get('DEFAULT_PASSWORD') or '123Qwerty!'
 app.config['MY_PFP'] = os.environ.get('MY_PFP') or 'default.png'
 app.config['MY_ROLE'] = os.environ.get('MY_ROLE') or 'User'
 
@@ -140,14 +148,8 @@ app.config['GITHUB_TARGET_NAME'] = os.environ.get('GITHUB_TARGET_NAME') or 'open
 
 
 # Gemini API settingsa
-app.config['GEMINI_SERVER'] = os.environ.get('GEMINI_SERVER') or 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+app.config['GEMINI_SERVER'] = os.environ.get('GEMINI_SERVER') or 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent'
 app.config['GEMINI_API_KEY'] = os.environ.get('GEMINI_API_KEY') or None
-
-
-# KASM settings
-app.config['KASM_SERVER'] = os.environ.get('KASM_SERVER') or 'https://kasm.opencodingsociety.com'
-app.config['KASM_API_KEY'] = os.environ.get('KASM_API_KEY') or None
-app.config['KASM_API_KEY_SECRET'] = os.environ.get('KASM_API_KEY_SECRET') or None
 
 
 # GROQ API settings

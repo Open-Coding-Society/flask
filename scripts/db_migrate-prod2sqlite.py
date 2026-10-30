@@ -61,6 +61,7 @@ EXPORT_ENDPOINTS = {
     'leaderboard':            '/api/export/leaderboard',
     'elementary_leaderboard': '/api/export/elementary_leaderboard',
     'skill_snapshots':        '/api/export/skill_snapshots',
+    'presence':               '/api/export/presence',  # one bundle, see model/presence_backup.py
 }
 
 # Data types that require paginated fetching
@@ -75,7 +76,16 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
 
 def sqlite_path(uri):
-    """Absolute on-disk path for a sqlite:/// URI, anchored to the repo root."""
+    """Absolute on-disk path for a sqlite:/// URI, anchored to the repo root.
+
+    PERSISTENCE_PREFIX ("instance") is injected here because Flask-SQLAlchemy
+    resolves a relative sqlite:/// URI relative to app.instance_path, not the
+    repo root or CWD -- confirmed against the actual on-disk db file, which
+    really does live at instance/volumes/user_management.db even though the
+    configured URI is sqlite:///volumes/user_management.db. A version of this
+    function that stripped sqlite:/// without re-adding "instance/" would
+    point at a path that doesn't exist.
+    """
     return os.path.join(ROOT, uri.replace('sqlite:///', f"{PERSISTENCE_PREFIX}/"))
 
 
@@ -378,7 +388,6 @@ def load_users(users_data):
                 sid=user_data.get('sid'),
                 role=user_data.get('role', 'User'),
                 pfp=user_data.get('pfp'),
-                kasm_server_needed=user_data.get('kasm_server_needed', False),
                 grade_data=user_data.get('grade_data') or user_data.get('gradeData'),
                 ap_exam=user_data.get('ap_exam') or user_data.get('apExam'),
                 school=user_data.get('school'),
@@ -387,6 +396,8 @@ def load_users(users_data):
             )
             if user_data.get('email'):
                 user.email = user_data['email']
+            # Keep the account's active/verified state; the constructor leaves it inactive
+            user.restore_state(user_data)
 
             for section_data in user_data.get('sections', []):
                 abbrev = section_data.get('abbreviation')
@@ -780,6 +791,15 @@ def load_skill_snapshots(snapshots_data):
     print(f"  Loaded {loaded} skill snapshots.")
 
 
+def load_presence(presence_data):
+    """Presence system tables (rooms, schedules, tags, periods, events), as one bundle."""
+    from model.presence_backup import import_presence
+    for table, stats in import_presence(presence_data or {}).items():
+        print(f"  {table}: {stats['imported']} imported, {stats['skipped']} skipped, {stats['failed']} failed")
+        for err in stats['errors'][:3]:
+            print(f"    - {err}")
+
+
 def load_all(all_data):
     """Load all data types into the local database in dependency order."""
     user_uid_map = {u.get('id'): u.get('uid') for u in all_data.get('users', []) if u.get('id') and u.get('uid')}
@@ -801,6 +821,7 @@ def load_all(all_data):
                           lambda: load_elementary_leaderboard(all_data.get('elementary_leaderboard', []))),
         ('skill_snapshots',
                           lambda: load_skill_snapshots(all_data.get('skill_snapshots', []))),
+        ('presence',      lambda: load_presence(all_data.get('presence', {}))),
     ]
 
     for name, loader in loaders:

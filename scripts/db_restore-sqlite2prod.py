@@ -52,6 +52,7 @@ IMPORT_ENDPOINTS = {
     'leaderboard':            '/api/export/import/leaderboard',
     'elementary_leaderboard': '/api/export/import/elementary_leaderboard',
     'skill_snapshots':        '/api/export/import/skill_snapshots',
+    'presence':               '/api/export/import/presence',  # one bundle, see model/presence_backup.py
 }
 
 # Data types large enough to need batched uploads
@@ -176,6 +177,10 @@ def read_local_data_from_db():
                 snapshot_data['userUid'] = snapshot.user.uid if snapshot.user else None
                 all_data['skill_snapshots'].append(snapshot_data)
             print(f"    Found {len(all_data['skill_snapshots'])} skill snapshots")
+
+            from model.presence_backup import export_presence
+            all_data['presence'] = export_presence()
+            print(f"    Found presence data: " + ", ".join(f"{len(v)} {k}" for k, v in all_data['presence'].items()))
 
             return all_data, None
 

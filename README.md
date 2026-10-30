@@ -1,6 +1,16 @@
-# README
+# Introduction
 
-> This is a project to support AP Computer Science Principles (APCSP) as well as a UC articulated Data Structures course. It was crafted iteratively starting in 2020 to the present time.  The primary purposes are ...
+Founded and maintained by John Mortensen, Open Coding Society's Flask project grew from a classroom need: helping students move beyond writing individual programs to building web applications that store data, communicate through APIs, and support real users.
+
+Developed iteratively since 2020, Flask has supported AP Computer Science Principles and Data Structures coursework. What began as a learning environment has evolved into a reusable backend for student projects, with authentication, database persistence, REST APIs, administrative interfaces, and deployment workflows.
+
+The project reflects OCS's approach to computer science education: students learn by building systems, examining how the pieces fit together, and extending working examples into their own applications. Contributions from students and educators have helped the project evolve, including former student Aiden Wu's work on authentication.
+
+This repository serves two purposes: it is a starting point for new projects and a working codebase through which students can explore how web applications are assembled, tested, secured, and deployed.
+
+Use it as a template for your own application, or fork it if you intend to contribute improvements back to Open Coding Society.
+
+## History
 
 - Used as starter code for student projects for `AP CSP 1 and 2` and `Data Structures 1` curriculum.
 - Used to teach key principles in learning the Python Flask programming environment.
@@ -57,7 +67,7 @@ pip install -r requirements.txt
   - From Extensions Marketplace install `SQLite3 Editor`
     - Open and view SQL database file `instance/volumes/user_management.db`
 
-  - Make a local `.env` file in root of project to contain your secret passwords
+  - Make a local `.env` file in root of project to contain your secret passwords. Every password must follow the same rule as Spring (8+ characters with an uppercase letter, a lowercase letter, a number, and one of `` ` ~ ! @ # $ % ^ & * ( ) ``), or the model rejects it when it seeds that account. Run `python scripts/verify_password_rule.py` to check.
 
   ```shell
   # Port configuration
@@ -78,7 +88,7 @@ pip install -r requirements.txt
   # Default user for testing 
   USER_NAME='Grace Hopper'
   USER_UID='hop'
-  USER_PASSWORD='123Hop!'
+  USER_PASSWORD='123Grace!'
   USER_PFP='hop.png'
   # Convience user defaults
   MY_NAME='John Mortensen'
@@ -94,10 +104,9 @@ pip install -r requirements.txt
   GITHUB_TOKEN=ghp_xxx
   GITHUB_TARGET_TYPE=user  # Use 'organization' or 'user'
   GITHUB_TARGET_NAME=Open-Coding-Society
-  # KASM Configuration (server is defaulted)
-  KASM_SERVER=https://kasm.opencodingsociety.com
-  KASM_API_KEY_SECRET=xxxx
-  KASM_API_KEY=xxx
+  RFID_API_KEY=xxxxx
+  # Optional: true once the camera posts face-check results (default false = "RFID only")
+  CAMERA_ENABLED=false
   # DB Configuration, AWS RDS
   IS_PRODUCTION=false # false = LOCAL true = DEPLOYED
   DB_USERNAME='admin'
@@ -111,6 +120,7 @@ pip install -r requirements.txt
   ```
 
   - Explore newly created SQL database
+    - Be sure to install SQLite3 Editor from VSCode Marketplace
     - Navigate too instance/volumes
     - View/open `user_management.db`
     - Loook at `users` table in viewer
@@ -125,6 +135,72 @@ pip install -r requirements.txt
 
   - Basic API test
     - [Jokes](http://localhost:8587/api/jokes/)
+
+### HTTP requests in VS Code
+
+Install the **REST Client** extension (Huachao Mao) and open
+[api/user_auth.http](api/user_auth.http). Click **Send Request** to authenticate;
+the request prompts for your user ID and password.
+
+The shared `baseUrl` configuration lives in
+[.vscode/settings.json](.vscode/settings.json), under
+`rest-client.environmentVariables`. Run **REST Client: Switch Environment**
+from the command palette (or click the REST Client environment in the status
+bar) to select:
+
+- **local**: `http://127.0.0.1:8587`, inherited from `$shared`.
+- **deployed**: `https://flask.opencodingsociety.com`.
+
+With **No Environment** selected, the shared localhost URL is used as a safe
+default. All request files should use `{{baseUrl}}` rather than defining a
+file-level `@baseUrl`, which would override the selected environment.
+Change the deployed URL for your own deployment.
+
+REST Client does not read Python's `app.config` directly. If you change
+`FLASK_PORT` in `.env`, also update the localhost URL in the shared settings.
+Keep credentials out of these version-controlled settings; use the request
+prompts instead.
+
+#### Presence system sequence
+
+Open [api/presence.http](api/presence.http). It walks through the presence
+system top to bottom: authenticate as an Admin or Teacher, create a room and a
+schedule, register a tag, start a manual period, send taps as a reader would
+(including a duplicate and a bad key), and read the room's status. Reader
+requests prompt for the `RFID_API_KEY`; keep it out of the file. A fresh
+database needs `db.create_all()` (or `./scripts/db_init.py` locally), and
+`seed_schedules()` loads the starter schedule from `model/presence_schedules.json`.
+
+#### Manual user CRUD sequence
+
+Open [api/user_crud.http](api/user_crud.http) and set `testUid` to a disposable,
+valid GitHub username that does not already exist in this app. Select **local**
+for development; the same requests also work with **deployed**, but mutate
+real data in that environment.
+
+1. Run [api/user_auth.http](api/user_auth.http) separately with an active
+   **Admin** account. REST Client remembers response cookies by default and
+   reuses them for matching hosts across request files. Authenticate again
+   after switching environments.
+2. Click **Send Request** for each numbered CRUD request, top to bottom.
+   Check the expected response in each heading before proceeding; stop if a
+   step fails, especially Create, to avoid modifying an existing account.
+3. After Delete, rerun Read all users and confirm `testUid` is absent.
+
+`GET /api/id` returns the logged-in Admin, not the newly created user.
+Updating another user and deleting users require Admin access.
+
+New accounts start inactive. The example creates a Mentor, which stays inactive
+(403 "Account pending verification" on protected endpoints) until a Teacher or
+Admin runs step 1b. A Teacher or Admin can activate any account, a student included;
+a student is also activated on their own when Google verifies their school email at
+sign-up. Activating a Mentor covers the full 365 days; for other accounts a body of
+`{"days": N}` sets how long (30 by default). The example
+retains `dob`, but the create endpoint currently ignores it.
+
+These are manual checks, not automated assertions. REST Client does not run
+all requests as an automated test sequence; a runner such as pytest or
+HTTPYac is needed for that.
 
 ### User Operations
 | Purpose | Correct Endpoint | What It Does |
@@ -279,11 +355,57 @@ safe, and it is the only order in which the pull can verify itself.
    transfer. Keep your local copy until it reports a clean reconciliation -- until then
    your local database is the only complete copy of that data.
 
+### Which path? Run `db_upgrade.py --check` first
+
+After every deploy, `scripts/db_upgrade.py --check` compares the models with the live
+database and says which path the change needs, so nobody has to work it out:
+
+- **Up to date** (exit 0): nothing to do.
+- **In place** (exit 2): run `db_upgrade.py` without `--check`. It creates missing tables
+  and adds missing columns, and touches nothing else. Most changes are this one.
+- **Rebuild needed** (exit 3): it names the column and why, changes nothing, and prints
+  the full workflow above (pull, `db_init.py`, restore).
+
+Both paths share their steps in `scripts/db_schema.py`: the same comparison, the same
+rollback point, and the same check afterwards that the database matches the models. Only
+the change itself differs (`ALTER TABLE` vs. drop and reload). `db_init.py` also prints a
+note when the in-place upgrade would have been enough.
+
+```bash
+python scripts/db_upgrade.py --check                 # which path; prints the SQL
+python scripts/db_upgrade.py                         # backup, ALTER TABLE, create_all(), re-count every table
+python scripts/db_upgrade.py --fill users.active=1   # existing rows get 1, new rows the model default
+```
+
+A column is added with `ALTER TABLE ... ADD COLUMN` when existing rows can get a value:
+it allows NULL, or it has a fixed default (`default=0`, `default="User"`). Existing rows
+get NULL or that default. When they need something else, such as keeping current accounts
+active while new ones start inactive, pass `--fill table.column=value`. `--fill` also lets
+a NOT NULL column with no fixed default (e.g. `default=datetime.utcnow`) be added.
+
+A missing column that is a primary key, unique, a foreign key, or NOT NULL with no fixed
+default and no `--fill` needs the rebuild. Tables and columns the models no longer use are listed and left in place.
+
+On production the web container has no `mysqldump`, so take the dump on the host first and
+pass it in with `--backup-file`; the exact commands are in the migration runbook. A new
+column on an existing table breaks every query of that table until it exists, so run the
+upgrade right after `docker compose up -d --build`, with the dump already taken.
+`python scripts/verify_db_upgrade.py` checks all of this on a throwaway database, for both
+paths, so the rarely used rebuild is tested every time the common one is.
+
 ### Tables covered by the migration
 
 `sections`, `users`, `topics`, `microblogs`, `posts`, `classrooms`, `feedback`, `study`,
 `personas`, `user_personas`, `leaderboard`, `elementary_leaderboard`, `skill_snapshots`,
 plus the `user_sections` and `classroom_students` association rows.
+
+The presence system's tables travel together as one `presence` bundle
+(`/api/export/presence`, `/api/export/import/presence`, built in
+`model/presence_backup.py`): `presence_schedules`, `presence_schedule_blocks`,
+`presence_schedule_overrides`, `presence_rooms` (with `presence_room_members`),
+`rfid_tags`, `presence_periods`, `presence_events`, and `camera_checks`. Rows are matched
+by uid, room and schedule name, and event id, so a rebuild with new ids keeps every
+tag, period, and tap.
 
 **Adding a new model?** It must be added in three places or its data is lost on the next
 migration: `MIGRATED_MODELS` plus export/import endpoints in

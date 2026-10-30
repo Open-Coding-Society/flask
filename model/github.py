@@ -54,14 +54,40 @@ class GitHubUser(Resource):
         except Exception as e:
             return {'message': str(e)}, 500
 
+    MORE_COMMITS_QUERY = """
+    query($owner: String!, $name: String!, $after: String!, $since: GitTimestamp!, $until: GitTimestamp!, $authorId: ID!) {
+        repository(owner: $owner, name: $name) {
+            defaultBranchRef { target { ... on Commit {
+                history(first: 100, after: $after, since: $since, until: $until, author: {id: $authorId}) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes { committedDate messageHeadline additions deletions url }
+                }
+            } } }
+        }
+    }
+    """
+
     def get_commit_stats(self, uid, start_date_str, end_date_str):
         start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
         end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
         start_date_iso = start_date.strftime('%Y-%m-%dT%H:%M:%SZ')
         end_date_iso = end_date.strftime('%Y-%m-%dT%H:%M:%SZ')
 
+        # GitHub filters each repo's history to this user's commits. Reading the latest
+        # commits by everyone and keeping this user's missed most of them in busy repos:
+        # pages gets thousands of commits a trimester, so only the newest 100 were read and
+        # the count fell every day as classmates pushed.
+        id_data, status_code = self.make_github_graphql_request(
+            "query($login: String!) { user(login: $login) { id } }", {"login": uid})
+        if status_code != 200:
+            return {'error': 'Failed to fetch data from GitHub'}, status_code
+        github_user = ((id_data or {}).get('data') or {}).get('user')
+        if not github_user:
+            return {'error': f'GitHub user {uid} not found'}, 404
+        author_id = github_user['id']
+
         repo_query = """
-        query($login: String!, $since: GitTimestamp!, $until: GitTimestamp!) {
+        query($login: String!, $since: GitTimestamp!, $until: GitTimestamp!, $authorId: ID!) {
         user(login: $login) {
             repositoriesContributedTo(first: 50, contributionTypes: [COMMIT], includeUserRepositories: true) {
             nodes {
@@ -71,18 +97,14 @@ class GitHubUser(Resource):
                 name
                 target {
                     ... on Commit {
-                    history(first: 100, since: $since, until: $until) {
+                    history(first: 100, since: $since, until: $until, author: {id: $authorId}) {
+                        pageInfo { hasNextPage endCursor }
                         nodes {
                         committedDate
                         messageHeadline
                         additions
                         deletions
                         url
-                        author {
-                            user {
-                            login
-                            }
-                        }
                         }
                     }
                     }
@@ -97,7 +119,8 @@ class GitHubUser(Resource):
         variables = {
             "login": uid,
             "since": start_date_iso,
-            "until": end_date_iso
+            "until": end_date_iso,
+            "authorId": author_id
         }
 
         response_data, status_code = self.make_github_graphql_request(repo_query, variables)
@@ -120,12 +143,21 @@ class GitHubUser(Resource):
                 if not branch or not branch.get('target'):
                     continue
 
-                history = branch['target'].get('history', {}).get('nodes', [])
-                for commit in history:
-                    author_info = commit.get('author', {}).get('user')
-                    if not author_info or author_info.get('login') != uid:
-                        continue  # Skip commits not by the specified user
+                history = branch['target'].get('history', {})
+                commits = history.get('nodes', [])
+                page = history.get('pageInfo') or {}
+                # More than 100 of this user's commits in one repo: read the rest.
+                while page.get('hasNextPage'):
+                    more, status_code = self.make_github_graphql_request(self.MORE_COMMITS_QUERY, {
+                        "owner": repo['owner']['login'], "name": repo['name'], "after": page['endCursor'],
+                        "since": start_date_iso, "until": end_date_iso, "authorId": author_id})
+                    if status_code != 200:
+                        return {'error': 'Failed to fetch data from GitHub'}, status_code
+                    history = more['data']['repository']['defaultBranchRef']['target']['history']
+                    commits += history.get('nodes', [])
+                    page = history.get('pageInfo') or {}
 
+                for commit in commits:
                     additions = commit.get('additions', 0)
                     deletions = commit.get('deletions', 0)
                     total_additions += additions
@@ -153,10 +185,24 @@ class GitHubUser(Resource):
             'details_of_commits': details_of_commits
         }, 200
 
+    def search_all(self, query, search_query):
+        """Every edge of a GitHub search, 100 per request (GitHub stops a search at 1000)."""
+        edges, after = [], None
+        while True:
+            data, status_code = self.make_github_graphql_request(query, {"query": search_query, "after": after})
+            if status_code != 200:
+                return data, status_code
+            search = data['data']['search']
+            edges += search['edges']
+            if not search['pageInfo']['hasNextPage']:
+                return edges, 200
+            after = search['pageInfo']['endCursor']
+
     def get_pr_stats(self, uid, start_date_str, end_date_str):
         query = """
-        query($query: String!) {
-            search(query: $query, type: ISSUE, first: 100) {
+        query($query: String!, $after: String) {
+            search(query: $query, type: ISSUE, first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
                 edges {
                     node {
                         ... on PullRequest {
@@ -184,21 +230,17 @@ class GitHubUser(Resource):
         }
         """
         search_query = f"type:pr author:{uid} created:{start_date_str}..{end_date_str}"
-        variables = {
-            "query": search_query
-        }
-        data, status_code = self.make_github_graphql_request(query, variables)
+        pr_stats, status_code = self.search_all(query, search_query)
         if status_code != 200:
-            return data, status_code
-
-        pr_stats = data['data']['search']['edges']
+            return pr_stats, status_code
 
         return {'pull_requests': pr_stats}, 200
 
     def get_issue_stats(self, uid, start_date_str, end_date_str):
         query = """
-        query($query: String!) {
-            search(query: $query, type: ISSUE, first: 100) {
+        query($query: String!, $after: String) {
+            search(query: $query, type: ISSUE, first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
                 edges {
                     node {
                         ... on Issue {
@@ -227,14 +269,9 @@ class GitHubUser(Resource):
         }
         """
         search_query = f"type:issue author:{uid} created:{start_date_str}..{end_date_str}"
-        variables = {
-            "query": search_query
-        }
-        data, status_code = self.make_github_graphql_request(query, variables)
+        issue_stats, status_code = self.search_all(query, search_query)
         if status_code != 200:
-            return data, status_code
-
-        issue_stats = data['data']['search']['edges']
+            return issue_stats, status_code
         return {'issues': issue_stats}, 200
 
     def get_total_received_issue_comments(self, user_id, start_date, end_date):

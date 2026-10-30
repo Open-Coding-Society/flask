@@ -1,8 +1,40 @@
+from collections import deque
 from flask import request, current_app, g
 from flask_login import current_user
 from functools import wraps
 import jwt
+import threading
+import time
 from model.user import User
+from model import account_types
+
+# When each limited account (a guest) made its recent requests, to hold it to requests_per_minute in
+# account_types.json. Kept in this process, so with several workers an account can make that many
+# requests a minute on each: it limits one account flooding the server, it does not meter it exactly.
+_recent = {}
+_recent_lock = threading.Lock()
+
+
+def throttled(user):
+    """True when this account has made its requests_per_minute in the last minute. A request is
+    counted once, however many checks it passes through."""
+    limit = account_types.requests_per_minute(user.role)
+    if limit is None or getattr(g, "request_counted", False):
+        return False
+    g.request_counted = True
+    now = time.monotonic()
+    with _recent_lock:
+        times = _recent.setdefault(user.id, deque())
+        while times and now - times[0] >= 60:
+            times.popleft()
+        if len(times) >= limit:
+            return True
+        times.append(now)
+        if len(_recent) > 1000:  # forget accounts that have gone quiet
+            for key in [k for k, v in _recent.items() if not v or now - v[-1] >= 60]:
+                del _recent[key]
+    return False
+
 
 def auth_required(roles=None):
     '''
@@ -21,7 +53,7 @@ def auth_required(roles=None):
       - JWT token authentication is fallback (stateless, works for APIs)
     
     Args:
-        roles: String or list of allowed roles (e.g., "Admin" or ["Admin", "Teacher"])
+        roles: String, list or tuple of allowed roles (e.g., "Admin" or ["Admin", "Teacher"])
                If None, any authenticated user is allowed
     
     Possible error responses:
@@ -104,11 +136,45 @@ def auth_required(roles=None):
                         "error": str(e)
                     }, 500
             
-            # At this point, user is authenticated via either session or JWT
+            # An account type can last only a few hours (see model/account_types.json). When it has
+            # passed the account is made inactive, and its record is kept.
+            if user.expired():
+                if user.active:
+                    user.deactivate()
+                return {
+                    "message": "This account has expired.",
+                    "data": None,
+                    "error": "Forbidden"
+                }, 403
+
+            # An inactive account is not authorized until a Teacher/Admin verifies it.
+            if not user.active:
+                return {
+                    "message": "Account pending verification.",
+                    "data": None,
+                    "error": "Forbidden"
+                }, 403
+
+            # An account type can be limited to a short list of requests, and to a number of
+            # requests a minute. The CORS preflight (OPTIONS) carries no login.
+            if request.method != 'OPTIONS':
+                if not account_types.request_allowed(user.role, request.method, request.path):
+                    return {
+                        "message": "This type of account is not allowed to do that.",
+                        "data": None,
+                        "error": "Forbidden"
+                    }, 403
+                if throttled(user):
+                    return {
+                        "message": "Too many requests. Wait a minute.",
+                        "data": None,
+                        "error": "Too Many Requests"
+                    }, 429, {"Retry-After": "60"}
+
             # Now check role requirements if specified
             if roles:
                 # Normalize roles to list for consistent checking
-                required_roles = roles if isinstance(roles, list) else [roles]
+                required_roles = list(roles) if isinstance(roles, (list, tuple)) else [roles]
                 
                 if user.role not in required_roles:
                     return {

@@ -17,9 +17,13 @@ pymysql
 psycopg2-binary
 python_dotenv
 boto3
+pypdf
+cryptography
+python-docx
 # ---------------------------------------------------------
 # Face Recognition & ML Dependencies
 # ---------------------------------------------------------
 # insightface
 # onnxruntime
 # opencv-python
+tzdata  # zoneinfo data for the bell schedule on slim images

@@ -1,5 +1,4 @@
 # imports from flask
-from datetime import datetime
 from urllib.parse import urljoin, urlparse
 from flask import abort, redirect, render_template, request, send_from_directory, url_for, jsonify, current_app, g # import render_template from "public" flask libraries
 from flask_login import current_user, login_user, logout_user
@@ -11,8 +10,10 @@ from dotenv import load_dotenv
 # import "objects" from "this" project
 from __init__ import app, db, login_manager  # Key Flask objects 
 from model.persona import Persona, initPersonas, initPersonaUsers
+from model.presence_schedule import seed_schedules
 # API endpoints
 from api.user import user_api 
+from api.authorize import throttled
 from api.python_exec_api import python_exec_api
 from api.javascript_exec_api import javascript_exec_api
 from api.section import section_api
@@ -33,10 +34,13 @@ from api.post import post_api  # Import the social media post API
 from api.congrats_api import congrats_api  # Import the congrats API
 from api.profile_game import profile_game_api  # CS Pathway Game profile persistence
 from api.snapshot_proxy import snapshot_proxy
+from api.rfid_api import rfid_api
+from api.presence_api import presence_api
 #from api.announcement import announcement_api ##temporary revert
 
 # database Initialization functions
 from model.user import User, initUsers
+from model import account_types, guest_window
 from model.user import Section;
 from model.github import GitHubUser
 from model.feedback import Feedback
@@ -56,14 +60,9 @@ from hacks.jokes import initJokes
 # server only Views
 
 import os
-import requests
 
 # Load environment variables
 load_dotenv()
-
-app.config['KASM_SERVER'] = os.getenv('KASM_SERVER')
-app.config['KASM_API_KEY'] = os.getenv('KASM_API_KEY')
-app.config['KASM_API_KEY_SECRET'] = os.getenv('KASM_API_KEY_SECRET')
 
 
 
@@ -94,6 +93,8 @@ app.register_blueprint(post_api)  # Register the social media post API
 app.register_blueprint(congrats_api)  # Register the congrats message API
 app.register_blueprint(profile_game_api)  # CS Pathway Game profile persistence
 app.register_blueprint(snapshot_proxy)  # Register the snapshot proxy API
+app.register_blueprint(rfid_api)  # Register the RFID attendance API
+app.register_blueprint(presence_api)  # Register the generic presence event API
 # app.register_blueprint(announcement_api) ##temporary revert
 
 # Jokes file initialization
@@ -113,14 +114,38 @@ def load_user(user_id):
     # user_id is the composite "id:token_version" from User.get_id(). A mismatched
     # token_version means the session predates a password change on this account --
     # returning None here tells Flask-Login the session is invalid.
-    try:
+    #
+    # A session issued before this field existed at all has no ":" -- treat that as
+    # token_version "0" (matching a fresh/unchanged account) instead of invalidating
+    # it outright. It still correctly fails below once the account's real
+    # token_version has moved past 0 from an actual password change.
+    if ":" in user_id:
         raw_id, token_version = user_id.split(":", 1)
+    else:
+        raw_id, token_version = user_id, "0"
+    try:
+        raw_id = int(raw_id)
     except ValueError:
         return None
-    user = User.query.get(int(raw_id))
+    user = User.query.get(raw_id)
     if user is None or str(user.token_version) != token_version:
         return None
+    if user.expired():
+        return None  # an account with a lifetime (a guest) has no session once it has passed
     return user
+
+@app.before_request
+def limit_session_accounts():
+    """An account type limited to a list of requests (a guest), and to a number of them a minute,
+    is held to that on Flask's own pages and login session too, not only through the API's token
+    check."""
+    if request.method == 'OPTIONS' or not current_user.is_authenticated:
+        return None
+    if not account_types.request_allowed(current_user.role, request.method, request.path):
+        return jsonify({'message': 'This type of account is not allowed to do that.'}), 403
+    if throttled(current_user):
+        return jsonify({'message': 'Too many requests. Wait a minute.'}), 429, {'Retry-After': '60'}
+    return None
 
 @app.context_processor
 def inject_user():
@@ -138,7 +163,11 @@ def login():
     next_page = request.args.get('next', '') or request.form.get('next', '')
     if request.method == 'POST':
         user = User.query.filter_by(_uid=request.form['username']).first()
-        if user and user.is_password(request.form['password']):
+        if user and user.is_password(request.form['password']) and not user.active:
+            error = 'Account pending verification.'
+        elif user and user.is_password(request.form['password']) and user.expired():
+            error = 'This account has expired.'
+        elif user and user.is_password(request.form['password']):
             login_user(user)
             if not is_safe_url(next_page):
                 return abort(400)
@@ -179,8 +208,14 @@ def index():
 @app.route('/users/table2')
 @login_required
 def u2table():
+    for guest in User.query.filter(User._role.in_(account_types.guest_roles()), User.active.is_(True)):
+        if guest.expired():
+            guest.deactivate()  # a guest whose time has passed is shown as inactive, its record kept
     users = User.query.all()
-    return render_template("u2table.html", user_data=users)
+    window_closes = guest_window.closes_at()
+    return render_template("u2table.html", user_data=users, role_options=current_user.grantable_roles(),
+                           guest_window_closes=None if window_closes is None else window_closes.isoformat() + "Z",
+                           guest_window_max=account_types.window_max_minutes())
 
 @app.route('/sections/')
 @login_required
@@ -204,6 +239,9 @@ def uploaded_file(filename):
 def delete_user(user_id):
     user = User.query.get(user_id)
     if user:
+        blocker = user.deletion_blocker(current_user)
+        if blocker:
+            return jsonify({'error': blocker[1]}), blocker[0]
         user.delete()
         return jsonify({'message': 'User deleted successfully'}), 200
     return jsonify({'error': 'User not found'}), 404
@@ -211,7 +249,7 @@ def delete_user(user_id):
 @app.route('/users/reset_password/<int:user_id>', methods=['POST'])
 @login_required
 def reset_password(user_id):
-    if current_user.role != 'Admin':
+    if not current_user.is_admin():
         return jsonify({'error': 'Unauthorized'}), 403
     
     user = User.query.get(user_id)
@@ -223,101 +261,10 @@ def reset_password(user_id):
         return jsonify({'message': 'Password reset successfully'}), 200
     return jsonify({'error': 'Password reset failed'}), 500
 
-@app.route('/kasm_users')
-def kasm_users():
-    # Fetch configuration details from environment or app config
-    SERVER = current_app.config.get('KASM_SERVER')
-    API_KEY = current_app.config.get('KASM_API_KEY')
-    API_KEY_SECRET = current_app.config.get('KASM_API_KEY_SECRET')
-
-    # Validate required configurations
-    if not SERVER or not API_KEY or not API_KEY_SECRET:
-        return render_template('error.html', message='KASM keys are missing'), 400
-
-    try:
-        # Prepare API request details
-        url = f"{SERVER}/api/public/get_users"
-        data = {
-            "api_key": API_KEY,
-            "api_key_secret": API_KEY_SECRET
-        }
-
-        # Perform the POST request
-        response = requests.post(url, json=data, timeout=10)  # Added timeout for reliability
-
-        # Validate the API response
-        if response.status_code != 200:
-            return render_template(
-                'error.html', 
-                message='Failed to get users', 
-                code=response.status_code
-            ), response.status_code
-
-        # Parse the users list from the response
-        users = response.json().get('users', [])
-
-        # Process `last_session` and handle potential parsing issues
-        for user in users:
-            last_session = user.get('last_session')
-            try:
-                user['last_session'] = datetime.fromisoformat(last_session) if last_session else None
-            except ValueError:
-                user['last_session'] = None  # Fallback for invalid date formats
-
-        # Sort users by `last_session`, treating `None` as the oldest date
-        sorted_users = sorted(
-            users, 
-            key=lambda x: x['last_session'] or datetime.min, 
-            reverse=True
-        )
-
-        # Render the sorted users in the template
-        return render_template('kasm_users.html', users=sorted_users)
-
-    except requests.RequestException as e:
-        # Handle connection errors or other request exceptions
-        return render_template(
-            'error.html', 
-            message=f"Error connecting to KASM API: {str(e)}"
-        ), 500
-        
-        
-@app.route('/delete_user/<user_id>', methods=['DELETE'])
-def delete_user_kasm(user_id):
-    if current_user.role != 'Admin':
-        return jsonify({'error': 'Unauthorized'}), 403
-    
-    SERVER = current_app.config.get('KASM_SERVER')
-    API_KEY = current_app.config.get('KASM_API_KEY')
-    API_KEY_SECRET = current_app.config.get('KASM_API_KEY_SECRET')
-
-    if not SERVER or not API_KEY or not API_KEY_SECRET:
-        return {'message': 'KASM keys are missing'}, 400
-
-    try:
-        # Kasm API to delete a user
-        url = f"{SERVER}/api/public/delete_user"
-        data = {
-            "api_key": API_KEY,
-            "api_key_secret": API_KEY_SECRET,
-            "target_user": {"user_id": user_id},
-            "force": False
-        }
-        response = requests.post(url, json=data)
-
-        if response.status_code == 200:
-            return {'message': 'User deleted successfully'}, 200
-        else:
-            return {'message': 'Failed to delete user'}, response.status_code
-
-    except requests.RequestException as e:
-        return {'message': 'Error connecting to KASM API', 'error': str(e)}, 500
-
-
 @app.route('/update_user/<string:uid>', methods=['PUT'])
 def update_user(uid):
     # Authorization check
-    if current_user.role != 'Admin':
+    if not current_user.is_admin():
         return jsonify({'error': 'Unauthorized'}), 403
 
     # Get the JSON data from the request
@@ -351,6 +298,7 @@ def generate_data():
     initMicroblogs()
     initPersonas()
     initPersonaUsers()
+    seed_schedules()  # presence schedules from model/presence_schedules.json
 
 # Register the custom command group with the Flask application
 app.cli.add_command(custom_cli)
