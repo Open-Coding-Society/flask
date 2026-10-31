@@ -251,3 +251,159 @@ Accept: application/json
 ### 26. Cleanup: remove the self-registered card (expect 200)
 DELETE {{baseUrl}}/api/rfid/tags/{{newTagUid}}
 Accept: application/json
+
+### 27. Period enrollment: give the demo schedule two periods, "Period A" running now for an hour
+# and "Period B" at midnight (expect 200). Uses this machine's clock as Pacific time, the
+# schedule's timezone; run between 01:00 and 23:00 so Period A does not cross midnight.
+PUT {{baseUrl}}/api/presence/schedules/{{createSchedule.response.body.$.id}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "blocks": [
+    {"name": "Period A", "weekdays": "mon,tue,wed,thu,fri,sat,sun", "start": "{{$localDatetime 'HH:mm'}}", "end": "{{$localDatetime 'HH:mm' 1 h}}"},
+    {"name": "Period B", "weekdays": "mon,tue,wed,thu,fri,sat,sun", "start": "00:00", "end": "00:01"}
+  ]
+}
+
+### 28. End the step 8 manual period early by starting a 1-second one, so the schedule decides again (expect 201)
+POST {{baseUrl}}/api/presence/rooms/{{createRoom.response.body.$.id}}/periods
+Content-Type: application/json
+Accept: application/json
+
+{
+  "name": "End Demo Period",
+  "duration_seconds": 1
+}
+
+### 29. Log in as a student (any non-staff account; expect 200). This replaces the staff login cookie.
+# @name studentLogin
+# @prompt studentUid Enter a student's user ID
+# @prompt studentPassword Enter the student's password
+POST {{baseUrl}}/api/authenticate
+Content-Type: application/json
+Accept: application/json
+
+{
+  "uid": "{{studentUid}}",
+  "password": "{{studentPassword}}"
+}
+
+### 30. Rooms a student can enroll in, with their periods (expect 200; the demo room lists
+# ["Period B", "Period A"] in start-time order, and no member uids)
+GET {{baseUrl}}/api/presence/enroll/rooms
+Accept: application/json
+
+### 31. Enroll in a period the room does not have (expect 400 with the valid "periods")
+PUT {{baseUrl}}/api/presence/enroll/me
+Content-Type: application/json
+Accept: application/json
+
+{
+  "room_id": {{createRoom.response.body.$.id}},
+  "period_name": "Period 9"
+}
+
+### 32. Enroll in Period A (expect 200; enrollments has the demo room, "Period A")
+PUT {{baseUrl}}/api/presence/enroll/me
+Content-Type: application/json
+Accept: application/json
+
+{
+  "room_id": {{createRoom.response.body.$.id}},
+  "period_name": "Period A"
+}
+
+### 33. My enrollment (expect 200; same as step 32)
+GET {{baseUrl}}/api/presence/enroll/me
+Accept: application/json
+
+### 34. A student cannot read the roster (expect 403)
+GET {{baseUrl}}/api/presence/rooms/{{createRoom.response.body.$.id}}/status
+Accept: application/json
+
+### 35. Log back in as the step 1 Admin or Teacher (expect 200)
+POST {{baseUrl}}/api/authenticate
+Content-Type: application/json
+Accept: application/json
+
+{
+  "uid": "{{login.request.body.$.uid}}",
+  "password": "{{login.request.body.$.password}}"
+}
+
+### 36. Room status in scheduled "Period A" ("period.source": "scheduled"): the student is listed with
+# "period_name": "Period A", and you with "period_name": null (every period) (expect 200)
+GET {{baseUrl}}/api/presence/rooms/{{createRoom.response.body.$.id}}/status
+Accept: application/json
+
+### 37. Log in as the student again (expect 200)
+POST {{baseUrl}}/api/authenticate
+Content-Type: application/json
+Accept: application/json
+
+{
+  "uid": "{{studentLogin.request.body.$.uid}}",
+  "password": "{{studentLogin.request.body.$.password}}"
+}
+
+### 38. Switch to Period B by enrolling in the same room again (expect 200; "period_name": "Period B")
+PUT {{baseUrl}}/api/presence/enroll/me
+Content-Type: application/json
+Accept: application/json
+
+{
+  "room_id": {{createRoom.response.body.$.id}},
+  "period_name": "Period B"
+}
+
+### 39. Log back in as staff (expect 200)
+POST {{baseUrl}}/api/authenticate
+Content-Type: application/json
+Accept: application/json
+
+{
+  "uid": "{{login.request.body.$.uid}}",
+  "password": "{{login.request.body.$.password}}"
+}
+
+### 40. Room status, still "Period A": the student is no longer listed (expect 200)
+GET {{baseUrl}}/api/presence/rooms/{{createRoom.response.body.$.id}}/status
+Accept: application/json
+
+### 41. Start a 2-minute manual period (a demo) (expect 201)
+POST {{baseUrl}}/api/presence/rooms/{{createRoom.response.body.$.id}}/periods
+Content-Type: application/json
+Accept: application/json
+
+{
+  "name": "Demo Period",
+  "duration_seconds": 120
+}
+
+### 42. Room status in the manual period: every member is listed, the student too (expect 200)
+GET {{baseUrl}}/api/presence/rooms/{{createRoom.response.body.$.id}}/status
+Accept: application/json
+
+### 43. Staff can set a member's period too (expect 200; "members" shows the student in "Period A")
+POST {{baseUrl}}/api/presence/rooms/{{createRoom.response.body.$.id}}/members/{{studentLogin.response.body.$.user.uid}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "period_name": "Period A"
+}
+
+### 44. Log in as the student again (expect 200)
+POST {{baseUrl}}/api/authenticate
+Content-Type: application/json
+Accept: application/json
+
+{
+  "uid": "{{studentLogin.request.body.$.uid}}",
+  "password": "{{studentLogin.request.body.$.password}}"
+}
+
+### 45. Leave the room (expect 200; "enrollments": [])
+DELETE {{baseUrl}}/api/presence/enroll/me/{{createRoom.response.body.$.id}}
+Accept: application/json

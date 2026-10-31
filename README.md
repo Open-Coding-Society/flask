@@ -178,6 +178,17 @@ same reader at once, nobody gets the card and both try again, so a card is never
 linked to the wrong person. Self-service is one card per person; replacing or
 removing a card stays with Teachers and Admins (`/api/rfid/tags`).
 
+Students enroll themselves in a room and one of its periods (steps 27-45): a
+logged-in user lists rooms with their periods (`GET /api/presence/enroll/rooms`),
+then picks one (`PUT /api/presence/enroll/me` with `{room_id, period_name}`).
+A room's periods are the block names of its schedule, so "Period 1" is one
+period even though it runs at different times on Wednesdays. During a scheduled
+period the room's status lists only the students enrolled in it, plus members
+Teachers and Admins added for every period; a manually started period (a demo)
+lists every member. Enrolling in the same room again switches the period, and
+`DELETE /api/presence/enroll/me/<room_id>` leaves it. A room without a schedule
+takes `"period_name": null`, meaning every period.
+
 #### Manual user CRUD sequence
 
 Open [api/user_crud.http](api/user_crud.http) and set `testUid` to a disposable,
@@ -412,7 +423,8 @@ The presence system's tables travel together as one `presence` bundle
 `presence_schedule_overrides`, `presence_rooms` (with `presence_room_members`),
 `rfid_tags`, `presence_periods`, `presence_events`, and `camera_checks`. Rows are matched
 by uid, room and schedule name, and event id, so a rebuild with new ids keeps every
-tag, period, and tap. `rfid_card_claims` is deliberately not migrated: a claim lives
+tag, period, and tap. Each room exports `members` (uid and `period_name`) next to
+`member_uids`; an older export with only `member_uids` imports them for every period. `rfid_card_claims` is deliberately not migrated: a claim lives
 for 60 seconds (see below), so there is nothing to keep across a rebuild.
 
 **Adding a new model?** It must be added in three places or its data is lost on the next
