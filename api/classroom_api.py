@@ -3,6 +3,7 @@ from __init__ import db
 from model.classroom import Classroom
 from model.user import User
 from api.authorize import token_required
+from model import account_types
 
 classroom_api = Blueprint('classroom_api', __name__, url_prefix='/api/classrooms')
 
@@ -10,7 +11,7 @@ classroom_api = Blueprint('classroom_api', __name__, url_prefix='/api/classrooms
 @token_required()
 def get_all_classrooms():
     current_user = g.current_user
-    if current_user.role == 'Admin':
+    if current_user.role == account_types.admin_role():
         classrooms = Classroom.query.all()
     else:
         user_school = current_user.school.strip()
@@ -25,7 +26,7 @@ def get_all_classrooms():
 def get_classroom_by_id(id):
     classroom = Classroom.query.get_or_404(id)
     current_user = g.current_user
-    if current_user.role != 'Admin' and classroom.school_name != current_user.school:
+    if current_user.role != account_types.admin_role() and classroom.school_name != current_user.school:
         return {"message": "Access denied"}, 403
     return jsonify(classroom.to_dict())
 
@@ -33,7 +34,7 @@ def get_classroom_by_id(id):
 @token_required()
 def create_new_classroom():
     current_user = g.current_user
-    if current_user.role not in ['Admin', 'Teacher']:
+    if current_user.role not in account_types.staff_roles():
         return {"message": "Permission denied"}, 403
 
     data = request.get_json()
@@ -54,9 +55,9 @@ def create_new_classroom():
 def delete_classroom_by_id(id):
     classroom = Classroom.query.get_or_404(id)
     current_user = g.current_user
-    if current_user.role not in ['Admin', 'Teacher']:
+    if current_user.role not in account_types.staff_roles():
         return {"message": "Permission denied"}, 403
-    if current_user.role != 'Admin' and classroom.school_name != current_user.school:
+    if current_user.role != account_types.admin_role() and classroom.school_name != current_user.school:
         return {"message": "Access denied"}, 403
 
     classroom.delete()
@@ -67,9 +68,9 @@ def delete_classroom_by_id(id):
 def update_classroom(id):
     classroom = Classroom.query.get_or_404(id)
     current_user = g.current_user
-    if current_user.role not in ['Admin', 'Teacher']:
+    if current_user.role not in account_types.staff_roles():
         return {"message": "Permission denied"}, 403
-    if current_user.role != 'Admin' and classroom.school_name != current_user.school:
+    if current_user.role != account_types.admin_role() and classroom.school_name != current_user.school:
         return {"message": "Access denied"}, 403
 
     data = request.get_json()
@@ -85,7 +86,7 @@ def update_classroom(id):
 def list_students_in_classroom(id):
     classroom = Classroom.query.get_or_404(id)
     current_user = g.current_user
-    if current_user.role != 'Admin' and classroom.school_name != current_user.school:
+    if current_user.role != account_types.admin_role() and classroom.school_name != current_user.school:
         return {"message": "Access denied"}, 403
 
     students = []
@@ -101,7 +102,7 @@ def list_students_in_classroom(id):
 def get_student_in_classroom(id, student_id):
     classroom = Classroom.query.get_or_404(id)
     current_user = g.current_user
-    if current_user.role != 'Admin' and classroom.school_name != current_user.school:
+    if current_user.role != account_types.admin_role() and classroom.school_name != current_user.school:
         return {"message": "Access denied"}, 403
 
     student = User.query.get_or_404(student_id)
@@ -118,9 +119,9 @@ def get_student_in_classroom(id, student_id):
 def add_student_to_classroom(id, student_id):
     classroom = Classroom.query.get_or_404(id)
     current_user = g.current_user
-    if current_user.role not in ['Admin', 'Teacher']:
+    if current_user.role not in account_types.staff_roles():
         return {"message": "Permission denied"}, 403
-    if current_user.role != 'Admin' and classroom.school_name != current_user.school:
+    if current_user.role != account_types.admin_role() and classroom.school_name != current_user.school:
         return {"message": "Access denied"}, 403
 
     student = User.query.get_or_404(student_id)
@@ -139,9 +140,9 @@ def add_student_to_classroom(id, student_id):
 def remove_student_from_classroom(id, student_id):
     classroom = Classroom.query.get_or_404(id)
     current_user = g.current_user
-    if current_user.role not in ['Admin', 'Teacher']:
+    if current_user.role not in account_types.staff_roles():
         return {"message": "Permission denied"}, 403
-    if current_user.role != 'Admin' and classroom.school_name != current_user.school:
+    if current_user.role != account_types.admin_role() and classroom.school_name != current_user.school:
         return {"message": "Access denied"}, 403
 
     student = User.query.get_or_404(student_id)

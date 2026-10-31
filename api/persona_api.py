@@ -3,6 +3,7 @@ import random
 from flask import Blueprint, g, request, jsonify
 from flask_restful import Api, Resource
 from api.authorize import auth_required, token_required
+from model import account_types
 from model.persona import Persona, UserPersona
 from model.user import User
 from __init__ import db
@@ -383,7 +384,7 @@ def _orchestrate_group_formation(body):
 class PersonaAPI:
 
     class _Create(Resource):
-        @auth_required(roles="Admin")
+        @auth_required(roles=account_types.admin_role())
         def post(self):
             """Create a new persona"""
             body = request.get_json()
@@ -440,7 +441,7 @@ class PersonaAPI:
                 return jsonify(json_ready)
 
     class _Update(Resource):
-        @auth_required(roles="Admin")
+        @auth_required(roles=account_types.admin_role())
         def put(self, id):
             """Update an existing persona"""
             body = request.get_json()
@@ -481,7 +482,7 @@ class PersonaAPI:
                 return {'message': f'Error updating persona: {str(e)}'}, 500
 
     class _Delete(Resource):
-        @auth_required(roles="Admin")
+        @auth_required(roles=account_types.admin_role())
         def delete(self, id):
             """Delete a persona"""
             persona = Persona.query.get(id)

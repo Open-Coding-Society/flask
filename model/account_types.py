@@ -1,4 +1,4 @@
-"""Account types and their verification rules, read from account_types.json so a fork of
+"""Account types and their verification rules, read from dataconfigs/account_types.json so a fork of
 OCS changes data, not code.
 
 Each account type has:
@@ -74,7 +74,7 @@ def _check(data):
 
 
 def _read():
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "account_types.json")
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dataconfigs", "account_types.json")
     with open(path) as fh:
         data = json.load(fh)
     _check(data)

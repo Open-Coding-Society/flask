@@ -7,7 +7,7 @@ to prove it was never touched. Complements scripts/verify_activation.py, which c
 Usage:  python scripts/verify_account_admin.py        (from the flask repo root)
 Exit:   0 all checks passed, 1 otherwise.
 """
-import copy, hashlib, os, re, secrets, sys, tempfile
+import ast, copy, glob, hashlib, os, re, secrets, sys, tempfile
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -255,7 +255,7 @@ def main():
     check("a deactivated Admin's still-open session cannot delete (403)", r.status_code == 403 and exists("zz_gone_mentor3"), r.status_code)
     set_active("zz_admin2", True)
 
-    # the must-keep roles come from the data (model/account_types.json), not from code
+    # the must-keep roles come from the data (model/dataconfigs/account_types.json), not from code
     set_active("zz_admin2", False)
     changed = copy.deepcopy(account_types._data)
     changed["essential_roles"] = ["Mentor"]
@@ -458,12 +458,20 @@ def main():
     with open(os.path.join(REPO, "templates", "u2table.html"), encoding="utf-8") as fh:
         named = re.findall(r"""['"](?:Admin|Teacher|Mentor|User)['"]""", fh.read())
     check("the table template names no roles", not named, str(named))
-    for name in ("api/user.py", "main.py"):
-        with open(os.path.join(REPO, name), encoding="utf-8") as fh:
-            named = re.findall(r"""['"](?:Admin|Teacher|Mentor|User)['"]""", fh.read())
-        check(f"{name} names no roles", not named, str(named))
+    # No API file names a role either: who may do what is read from account_types.json. Comments and
+    # docstrings may mention one; only a string in the code counts.
+    templates = sorted(glob.glob(os.path.join(REPO, "templates", "*.html")))
+    named = [f"{os.path.basename(t)}: {m}" for t in templates for m in
+             re.findall(r"""['"](?:Admin|Teacher|Mentor)['"]""", open(t, encoding="utf-8").read())]
+    check("no template names a role", not named, str(named))
+    for name in sorted(glob.glob(os.path.join(REPO, "api", "*.py"))) + [os.path.join(REPO, "main.py")]:
+        tree = ast.parse(open(name, encoding="utf-8").read())
+        docstrings = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Expr)}
+        named = sorted({n.lineno for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                        and n.value in ("Admin", "Teacher", "Mentor", "Guest") and id(n) not in docstrings})
+        check(f"{os.path.relpath(name, REPO)} names no roles", not named, f"lines {named}")
 
-    # which role is the Admin role comes from the data (model/account_types.json), not from code
+    # which role is the Admin role comes from the data (model/dataconfigs/account_types.json), not from code
     changed = copy.deepcopy(account_types._data)
     changed["admin_role"] = "Principal"
     with app.app_context():
@@ -483,7 +491,7 @@ def main():
         refused = True
     check("an admin_role that is not one of the staff roles is refused at startup", refused)
 
-    # who counts as staff comes from the data (model/account_types.json), not from code
+    # who counts as staff comes from the data (model/dataconfigs/account_types.json), not from code
     changed = copy.deepcopy(account_types._data)
     changed["staff_roles"] = ["Teacher"]
     with app.app_context():

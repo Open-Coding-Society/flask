@@ -3,6 +3,7 @@ from flask_restful import Api, Resource
 from flask_login import current_user, login_required
 from datetime import datetime
 from api.authorize import token_required
+from model import account_types
 from model.github import GitHubUser, GitHubOrg
 from model.user import User
 import time
@@ -212,7 +213,7 @@ class AdminUserIssues(Resource):
     def get(self, uid):
         try:
             # Check if the current user is an Admin
-            if g.current_user.role != 'Admin':
+            if g.current_user.role != account_types.admin_role():
                 return {'message': 'Access denied: Admins only.'}, 403
 
             # Fetch the request body to extract date range (if any)
@@ -252,7 +253,7 @@ class AdminUserCommits(Resource):
     def get(self, uid):
         try:
             # Check if the current user has 'Admin' role; if not, deny access with a 403 status
-            if g.current_user.role != 'Admin':
+            if g.current_user.role != account_types.admin_role():
                 return {'message': 'Access denied: Admins only.'}, 403
 
             # Attempt to parse the request's JSON body; if the request does not contain valid JSON, assign an empty dictionary
