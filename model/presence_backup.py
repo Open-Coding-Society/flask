@@ -2,7 +2,7 @@
 process (api/data_export_import_api.py). Rows are linked by natural keys,
 never by database ids, because ids change when tables are rebuilt:
 
-    users      -> uid               rooms     -> name
+    users      -> uid               rooms     -> name (members by uid, with period_name)
     schedules  -> name              tags      -> tag_uid
     events     -> event_id          checks    -> event_id
     periods    -> old id, mapped to the new id during import
@@ -14,7 +14,7 @@ skips anything that already exists, so running it twice is safe.
 from datetime import date, datetime
 
 from __init__ import db
-from model.presence import CameraCheck, PresenceEvent, PresencePeriod, PresenceRoom
+from model.presence import CameraCheck, PresenceEvent, PresencePeriod, PresenceRoom, set_membership
 from model.presence_schedule import PresenceSchedule, PresenceScheduleOverride
 from model.rfid_tag import RfidTag
 from model.user import User
@@ -92,9 +92,12 @@ def import_presence(data):
                                     schedule_id=schedule_id.get(item.get('schedule')))
                 db.session.add(room)
                 db.session.flush()
-                for uid in item.get('member_uids', []):
-                    if uid in user_id:
-                        room.members.append(User.query.get(user_id[uid]))
+                # members carries each period; exports made before periods only have member_uids.
+                members = item.get('members') or [{'uid': uid, 'period_name': None}
+                                                  for uid in item.get('member_uids', [])]
+                for member in members:
+                    if member.get('uid') in user_id:
+                        set_membership(room, User.query.get(user_id[member['uid']]), member.get('period_name'))
                 db.session.commit()
                 res['imported'] += 1
             except Exception as e:
