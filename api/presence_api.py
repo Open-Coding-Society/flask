@@ -7,6 +7,8 @@ be a classroom, a club meeting, or an event.
 Devices authenticate with the shared X-API-Key (RFID_API_KEY), the same
 device-to-server pattern as /api/rfid/scan, which is a thin wrapper around
 record_event() below. Admin/Teacher actions use the normal OCS login.
+Any logged-in person can enroll themselves in one period of a room
+(/enroll, see PresenceEnroll).
 
 RFID tap body:
     {
@@ -45,7 +47,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 from flask_restful import Api, Resource
 from sqlalchemy.exc import IntegrityError
 
@@ -828,6 +830,66 @@ class PresenceAPI:
     api.add_resource(_Overrides, '/schedules/overrides')
     api.add_resource(_Override, '/schedules/overrides/<int:override_id>')
     api.add_resource(_Schedule, '/schedules/<int:schedule_id>')
+
+
+# ---------------------------------------------------------------- enrollment
+
+def my_enrollments(user):
+    """The logged-in person's own memberships, for /enroll/me. Only their own
+    rows, so a student never sees who else is in a room."""
+    rows = (db.session.query(PresenceRoom, presence_room_members.c.period_name)
+            .join(presence_room_members, presence_room_members.c.room_id == PresenceRoom.id)
+            .filter(presence_room_members.c.user_id == user.id)
+            .order_by(PresenceRoom._name)
+            .all())
+    return {
+        "uid": user.uid,
+        "name": user.name,
+        "enrollments": [{"room_id": room.id, "room": room.name, "period_name": period_name}
+                        for room, period_name in rows],
+    }
+
+
+class PresenceEnroll:
+    """Self-enrollment: any logged-in person picks a room and one of its
+    periods, and then shows on that room's roster during that period (see
+    room_status). Staff manage everyone else through /rooms/<id>/members."""
+
+    class _EnrollRooms(PresenceResource):
+        @token_required()
+        def get(self):
+            """Rooms to enroll in, with their period names. No member data."""
+            return [{"id": room.id, "name": room.name, "periods": period_names(room)}
+                    for room in PresenceRoom.query.order_by(PresenceRoom._name).all()]
+
+    class _EnrollMe(PresenceResource):
+        @token_required()
+        def get(self):
+            return my_enrollments(g.current_user)
+
+        @token_required()
+        def put(self):
+            """Enroll in a room's period: {room_id, period_name}. Enrolling in
+            the same room again switches the period. period_name may be null
+            only in a room without a schedule (every period)."""
+            user, data = g.current_user, json_body()
+            room = get_room(data.get("room_id"))
+            set_membership(room, user, check_period(room, data.get("period_name"), allow_all=False))
+            db.session.commit()
+            return my_enrollments(user)
+
+    class _EnrollMeRoom(PresenceResource):
+        @token_required()
+        def delete(self, room_id):
+            """Leave a room. Leaving one you are not in changes nothing."""
+            user = g.current_user
+            remove_membership(get_room(room_id), user)
+            db.session.commit()
+            return my_enrollments(user)
+
+    api.add_resource(_EnrollRooms, '/enroll/rooms')
+    api.add_resource(_EnrollMe, '/enroll/me')
+    api.add_resource(_EnrollMeRoom, '/enroll/me/<int:room_id>')
 
 
 def _grace(data):
