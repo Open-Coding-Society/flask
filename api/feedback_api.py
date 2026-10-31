@@ -29,6 +29,11 @@ class FeedbackAPI:
             label = type if type in valid_types else 'Other'
             author_note = f"_Submitted by @{github_username}_" if github_username != 'Anonymous' else "_Submitted by [Anonymous]_"
 
+            # A repeat click returns the first copy and opens no second GitHub issue.
+            duplicate = Feedback.recent_duplicate(title, body, github_username)
+            if duplicate:
+                return jsonify(duplicate.read())
+
             feedback = Feedback(title, body, type, github_username).create()
 
             # Attempt to create GitHub issue

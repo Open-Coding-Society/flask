@@ -247,6 +247,17 @@ HTTPYac is needed for that.
 | POST | `/api/microblog/topics/auto-create` | Auto-create topic for page |
 | GET | `/api/microblog/topics?pagePath=X` | Get topic by page path |
 
+### Feedback Operations
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/feedback/` | Save feedback and open a `[User Feedback]` issue on Open-Coding-Society/pages |
+| GET | `/api/feedback/all` | All feedback, newest first |
+| GET | `/api/feedback/user/<uid>` | One user's feedback with each GitHub issue's Open/Closed state |
+
+**Duplicate submissions:** a POST with the same `title`, `body` and `uid` as feedback saved
+within the last minute (`DUPLICATE_WINDOW` in `model/feedback.py`) returns that saved feedback
+and opens no new GitHub issue. Double clicks used to open one issue per click.
+
 ## Idea
 
 ### Files and Directories in this Project
