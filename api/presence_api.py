@@ -56,7 +56,7 @@ from model.presence import (CameraCheck, PresenceEvent, PresencePeriod, Presence
                             presence_room_members, to_iso_z, utc_now)
 from model.presence_schedule import (PresenceSchedule, PresenceScheduleOverride, ScheduleError,
                                      check_timezone, parse_date, scheduled_block_at)
-from model.rfid_tag import RfidTag
+from model.rfid_tag import RfidCardClaim, RfidTag
 from model.user import User
 
 presence_api = Blueprint('presence_api', __name__, url_prefix='/api/presence')
@@ -252,6 +252,33 @@ def resolve_user(source, data):
     return get_user(uid), None
 
 
+def claim_unregistered_tag(room, tag_uid, now):
+    """Self-registration (see /api/rfid/claims): links an unregistered card
+    tapped at this room's reader to the one person with an open claim there.
+    Returns a response dict, or None when nobody is registering (the tap is
+    then rejected as unregistered). Two open claims at once is a conflict:
+    nobody gets the card and both are asked to try again."""
+    claims = [c for c in RfidCardClaim.query.filter_by(_room_id=room.id, _status="open").all() if c.is_open(now)]
+    if not claims:
+        return None
+    if len(claims) > 1:
+        for claim in claims:
+            claim.status = "conflict"
+        db.session.commit()
+        raise PresenceError("more than one person is registering a card at this reader; try again one at a time",
+                            409, status="claim_conflict")
+    claim = claims[0]
+    if RfidTag.query.filter_by(_user_id=claim.user_id).first():
+        claim.status = "cancelled"  # they got a card some other way since opening the claim
+        db.session.commit()
+        return None
+    db.session.add(RfidTag(tag_uid=tag_uid, user_id=claim.user_id))
+    claim.status, claim.tag_uid = "registered", tag_uid
+    db.session.commit()
+    return {"status": "card_registered", "uid": claim.user.uid, "user_name": claim.user.name,
+            "message": f"card registered to {claim.user.name}"}
+
+
 def record_event(data):
     """Validates, de-duplicates, and stores one presence event. Returns
     (response_dict, http_status). Raises PresenceError on bad input."""
@@ -276,7 +303,15 @@ def record_event(data):
         occurred_at = received_at
         adjusted = True
 
-    user, tag_uid = resolve_user(source, data)
+    try:
+        user, tag_uid = resolve_user(source, data)
+    except PresenceError as e:
+        # An unregistered card may be someone registering it right now.
+        if source == "rfid" and e.extra.get("status") == "unregistered":
+            claimed = claim_unregistered_tag(room, str(data.get("tag_uid")).strip(), received_at)
+            if claimed:
+                return claimed, 200
+        raise
 
     period = period_at(room, occurred_at)
     if period:

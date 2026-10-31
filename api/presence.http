@@ -6,6 +6,7 @@
 @roomName = Presence Demo Room
 @scheduleName = Presence Demo Schedule
 @tagUid = 1234567890
+@newTagUid = 9876543210
 
 ### 1. Authenticate as an Admin or Teacher (expect 200)
 # @name login
@@ -212,4 +213,41 @@ Accept: application/json
 
 ### 21. Cleanup: remove the demo tag (expect 200). The room keeps its taps, so it is not deleted.
 DELETE {{baseUrl}}/api/rfid/tags/{{tagUid}}
+Accept: application/json
+
+### 22. Self-registration: your card (expect 200; "cards" is empty after step 21)
+GET {{baseUrl}}/api/rfid/cards/me
+Accept: application/json
+
+### 23. Open a 60-second window to register your own card at the room's reader (expect 201; 409 if you already have a card)
+# @name claim
+POST {{baseUrl}}/api/rfid/claims
+Content-Type: application/json
+Accept: application/json
+
+{
+  "room_id": {{createRoom.response.body.$.id}}
+}
+
+### 24. Within 60 seconds, tap a new card, as the reader sends it (expect 200, "status": "card_registered")
+# @prompt apiKey Enter the device key (RFID_API_KEY)
+POST {{baseUrl}}/api/rfid/scan
+Content-Type: application/json
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "event_id": "{{$guid}}",
+  "tag_uid": "{{newTagUid}}",
+  "room_id": {{createRoom.response.body.$.id}},
+  "occurred_at": "{{$datetime iso8601}}",
+  "device_id": "presence-http"
+}
+
+### 25. Claim status: registered, card shown by its last 4 digits (expect 200)
+GET {{baseUrl}}/api/rfid/claims/{{claim.response.body.$.id}}
+Accept: application/json
+
+### 26. Cleanup: remove the self-registered card (expect 200)
+DELETE {{baseUrl}}/api/rfid/tags/{{newTagUid}}
 Accept: application/json
