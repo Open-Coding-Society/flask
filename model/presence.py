@@ -15,13 +15,74 @@ def to_iso_z(dt):
     return dt.isoformat(timespec="milliseconds") + "Z"
 
 
-# Who belongs to a room. The status roster is these members plus anyone who
-# has produced a presence event in the room.
+# Who belongs to a room, and in which period. period_name is the name of one
+# of the room's schedule blocks ("Period 3"), so a student shows on the roster
+# only in their own period; NULL means every period (staff-added members and
+# rooms without a schedule). One period per person per room: the key stays
+# (room_id, user_id), and enrolling again switches the period.
 presence_room_members = db.Table(
     'presence_room_members',
     db.Column('room_id', db.Integer, db.ForeignKey('presence_rooms.id'), primary_key=True),
     db.Column('user_id', db.Integer, db.ForeignKey('users.id'), primary_key=True),
+    db.Column('period_name', db.String(80), nullable=True),
 )
+
+
+def membership_rows(room):
+    """[(user, period_name)] for a room's members, by name. Read from the
+    table directly since room.members cannot see period_name."""
+    from model.user import User
+    rows = (db.session.query(User, presence_room_members.c.period_name)
+            .join(presence_room_members, presence_room_members.c.user_id == User.id)
+            .filter(presence_room_members.c.room_id == room.id)
+            .all())
+    return sorted(rows, key=lambda row: (row[0].name or "").lower())
+
+
+def membership_period(room, user):
+    """(True, period_name) if user is a member of room, else (False, None)."""
+    row = db.session.execute(
+        presence_room_members.select().where(presence_room_members.c.room_id == room.id,
+                                             presence_room_members.c.user_id == user.id)
+    ).first()
+    return (True, row.period_name) if row else (False, None)
+
+
+def set_membership(room, user, period_name):
+    """Adds user to room in period_name (None = every period), or switches the
+    period of an existing member. Does not commit. Appending through
+    room.members would always write NULL, hence the explicit insert/update."""
+    is_member, _ = membership_period(room, user)
+    if is_member:
+        db.session.execute(presence_room_members.update()
+                           .where(presence_room_members.c.room_id == room.id,
+                                  presence_room_members.c.user_id == user.id)
+                           .values(period_name=period_name))
+    else:
+        db.session.execute(presence_room_members.insert()
+                           .values(room_id=room.id, user_id=user.id, period_name=period_name))
+
+
+def remove_membership(room, user):
+    """Removes user from room, if a member. Does not commit."""
+    db.session.execute(presence_room_members.delete()
+                       .where(presence_room_members.c.room_id == room.id,
+                              presence_room_members.c.user_id == user.id))
+
+
+def period_names(room):
+    """The room's period names: the unique block names of its own schedule, in
+    start-time order ("Period 1" runs at different times on Wednesdays but is
+    still one period). [] if the room has no schedule. Schedule overrides are
+    not included, so on an override day whose blocks have other names only
+    every-period members are on the roster."""
+    if not room.schedule:
+        return []
+    names = []
+    for block in room.schedule.blocks:  # ordered by start time
+        if block.name not in names:
+            names.append(block.name)
+    return names
 
 
 class PresenceRoom(db.Model):
@@ -64,13 +125,17 @@ class PresenceRoom(db.Model):
     def schedule_id(self, value): self._schedule_id = value
 
     def to_dict(self):
+        rows = membership_rows(self)
         return {
             'id': self.id,
             'name': self._name,
             'description': self._description,
             'schedule_id': self._schedule_id,
             'schedule': self.schedule.name if self.schedule else None,
-            'member_uids': sorted(u.uid for u in self.members),
+            # member_uids stays for older clients and exports; members adds each period.
+            'member_uids': sorted(u.uid for u, _ in rows),
+            'members': [{'uid': u.uid, 'name': u.name, 'period_name': p} for u, p in rows],
+            'periods': period_names(self),
             'created_at': to_iso_z(self._created_at),
         }
 
