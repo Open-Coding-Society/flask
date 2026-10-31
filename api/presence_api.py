@@ -51,8 +51,9 @@ from sqlalchemy.exc import IntegrityError
 
 from __init__ import db
 from api.authorize import token_required
-from model.presence import (CameraCheck, PresenceEvent, PresencePeriod, PresenceRoom,
-                            presence_room_members, to_iso_z, utc_now)
+from model.presence import (CameraCheck, PresenceEvent, PresencePeriod, PresenceRoom, membership_period,
+                            membership_rows, period_names, presence_room_members, remove_membership,
+                            set_membership, to_iso_z, utc_now)
 from model.presence_schedule import (PresenceSchedule, PresenceScheduleOverride, ScheduleError,
                                      check_timezone, parse_date, scheduled_block_at)
 from model.rfid_tag import RfidCardClaim, RfidTag
@@ -156,6 +157,22 @@ def get_user(uid):
     if not user:
         raise PresenceError(f"no user with uid {uid}", 404, status="unregistered")
     return user
+
+
+def check_period(room, period_name, allow_all):
+    """period_name if it is one of the room's periods (see period_names), or
+    None for every period. allow_all lets staff choose every period in any
+    room; a student may only when the room has no schedule, so they cannot
+    land on every period's roster by leaving the period out."""
+    names = period_names(room)
+    period_name = str(period_name).strip() if period_name is not None else ""
+    if not period_name:
+        if allow_all or not names:
+            return None
+        raise PresenceError(f"period_name required; room {room.id} has periods", 400, periods=names)
+    if period_name not in names:
+        raise PresenceError(f"{period_name!r} is not a period of room {room.id}", 400, periods=names)
+    return period_name
 
 
 def parse_occurred_at(value):
@@ -460,9 +477,13 @@ def compute_state(events, period, now):
 
 
 def room_status(room):
-    """Each person's current state for the room's current period. The roster
-    is the room's members plus anyone who has ever produced a presence event
-    in the room (so tagged people show up before membership is set up)."""
+    """Each person's current state for the room's current period. In a
+    scheduled period the roster is the members enrolled in that period (by
+    name) plus every-period members; a manual period (a demo, an event) shows
+    every member. Anyone who has ever produced a presence event in the room
+    and is not a member is added too (so tagged people show up before
+    membership is set up); an enrolled student is not, so they only appear in
+    their own period."""
     now = utc_now()
     period = current_period(room, now)
     body = {
@@ -474,13 +495,15 @@ def room_status(room):
     if not period:
         return body
 
-    members = {u.id: u for u in room.members}
+    rows = membership_rows(room)
+    period_of = {u.id: p for u, p in rows}
+    members = {u.id: u for u, p in rows if period.source == "manual" or p is None or p == period.name}
     seen_ids = {
         row[0]
         for row in db.session.query(PresenceEvent._user_id).filter(PresenceEvent._room_id == room.id).distinct()
     }
     roster = dict(members)
-    missing = seen_ids - roster.keys()
+    missing = seen_ids - period_of.keys()
     if missing:
         roster.update({u.id: u for u in User.query.filter(User.id.in_(missing))})
 
@@ -513,6 +536,7 @@ def room_status(room):
             # Camera verification of the person's most recent tap.
             "verification": tap_verification(last, checks_by_tap.get(last.id), now) if last else None,
             "member": user.id in members,
+            "period_name": period_of.get(user.id),
         })
     return body
 
@@ -536,10 +560,14 @@ def apply_room_fields(room, data):
         if not isinstance(data["member_uids"], list):
             raise PresenceError("member_uids must be a list of uids")
         users = [get_user(uid) for uid in data["member_uids"]]
-        for user in room.members.all():
-            room.members.remove(user)
+        # Only the difference changes, so members who stay keep their period.
+        keep = {user.id for user in users}
+        for user, _ in membership_rows(room):
+            if user.id not in keep:
+                remove_membership(room, user)
         for user in users:
-            room.members.append(user)
+            if not membership_period(room, user)[0]:
+                set_membership(room, user, None)
 
 
 class PresenceAPI:
@@ -628,18 +656,23 @@ class PresenceAPI:
     class _RoomMember(PresenceResource):
         @token_required(STAFF)
         def post(self, room_id, uid):
+            """Adds a member: optional {period_name} (null or left out = every
+            period). Posting an existing member with period_name changes it;
+            without one, their period is left as it is."""
             room, user = get_room(room_id), get_user(uid)
-            if not room.members.filter(User.id == user.id).first():
-                room.members.append(user)
+            data = request.get_json(silent=True) or {}
+            if not isinstance(data, dict):
+                raise PresenceError("body must be a JSON object, e.g. {\"period_name\": \"Period 3\"}")
+            if "period_name" in data or not membership_period(room, user)[0]:
+                set_membership(room, user, check_period(room, data.get("period_name"), allow_all=True))
                 db.session.commit()
             return room.to_dict()
 
         @token_required(STAFF)
         def delete(self, room_id, uid):
             room, user = get_room(room_id), get_user(uid)
-            if room.members.filter(User.id == user.id).first():
-                room.members.remove(user)
-                db.session.commit()
+            remove_membership(room, user)
+            db.session.commit()
             return room.to_dict()
 
     class _RoomPeriods(PresenceResource):
