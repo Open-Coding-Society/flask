@@ -5,6 +5,7 @@ Handles CRUD operations for micro blog posts, replies, reactions, and topics
 from flask import Blueprint, request, jsonify, g
 from flask_restful import Api, Resource
 from api.authorize import token_required
+from model import account_types
 from model.microblog import MicroBlog, Topic
 from __init__ import db
 
@@ -127,7 +128,7 @@ class MicroBlogAPI:
                return {'message': 'MicroBlog post not found'}, 404
           
            # Check if user owns the post or is admin
-           if microblog._user_id != current_user.id and getattr(current_user, 'role', None) != 'Admin':
+           if microblog._user_id != current_user.id and getattr(current_user, 'role', None) != account_types.admin_role():
                return {'message': 'Permission denied'}, 403
           
            try:
@@ -161,7 +162,7 @@ class MicroBlogAPI:
                return {'message': 'MicroBlog post not found'}, 404
           
            # Check if user owns the post or is admin
-           if microblog._user_id != current_user.id and getattr(current_user, 'role', None) != 'Admin':
+           if microblog._user_id != current_user.id and getattr(current_user, 'role', None) != account_types.admin_role():
                return {'message': 'Permission denied'}, 403
           
            try:
@@ -338,7 +339,7 @@ class TopicAPI:
            """Create a new topic for a page (Admin only)"""
            current_user = g.current_user
           
-           if getattr(current_user, 'role', None) != 'Admin':
+           if getattr(current_user, 'role', None) != account_types.admin_role():
                return {'message': 'Permission denied. Admin access required.'}, 403
           
            body = request.get_json()
@@ -431,7 +432,7 @@ class TopicAPI:
            """Update topic settings (Admin only)"""
            current_user = g.current_user
           
-           if getattr(current_user, 'role', None) != 'Admin':
+           if getattr(current_user, 'role', None) != account_types.admin_role():
                return {'message': 'Permission denied. Admin access required.'}, 403
           
            body = request.get_json()

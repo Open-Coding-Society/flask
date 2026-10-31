@@ -60,6 +60,7 @@ import io
 import json
 import re
 from api.authorize import token_required
+from model import account_types
 
 MAX_GEMINI_RETRIES = 3
 GEMINI_RETRY_STATUS_CODES = {429, 503}
@@ -95,7 +96,7 @@ def require_admin_if_production(f):
     """
     is_production = os.environ.get('IS_PRODUCTION', 'false').lower() == 'true'
     if is_production:
-        return token_required(roles=["Admin", "Teacher"])(f)
+        return token_required(roles=account_types.staff_roles())(f)
     return f
 
 # =============================================================================

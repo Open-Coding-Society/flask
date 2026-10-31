@@ -22,7 +22,7 @@
                 <td>{{ section._name }}</td>
                 <td>
                     <button class="btn btn-primary edit-btn" data-id="{{ section.id }}">Edit</button>
-                    {% if current_user.role == 'Admin' %}
+                    {% if current_user.is_admin() %}
                     <button class="btn btn-danger delete-btn" data-id="{{ section.id }}">Delete</button>
                     {% endif %}
                 </td>
@@ -32,7 +32,7 @@
     </table>
 
     <!-- Add New Section Button -->
-    {% if current_user.role == 'Admin' %}
+    {% if current_user.is_admin() %}
     <button class="btn btn-success" id="addSectionBtn">Add New Section</button>
     {% endif %}
 </div>

@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_login import current_user, login_required
+from model import account_types
 from model.study import Study
 from __init__ import db
 import json
@@ -138,7 +139,7 @@ def delete_study_record(record_id):
             return jsonify({'error': 'Study record not found'}), 404
         
         # Check if the record belongs to the current user (optional security check)
-        if record.user_id and record.user_id != current_user.id and current_user.role != 'Admin':
+        if record.user_id and record.user_id != current_user.id and current_user.role != account_types.admin_role():
             return jsonify({'error': 'Unauthorized'}), 403
         
         if record.delete():

@@ -53,6 +53,7 @@ from sqlalchemy.exc import IntegrityError
 
 from __init__ import db
 from api.authorize import token_required
+from model import account_types
 from model.presence import (CameraCheck, PresenceEvent, PresencePeriod, PresenceRoom, membership_period,
                             membership_rows, period_names, presence_room_members, remove_membership,
                             set_membership, to_iso_z, utc_now)
@@ -65,7 +66,7 @@ presence_api = Blueprint('presence_api', __name__, url_prefix='/api/presence')
 api = Api(presence_api)
 
 DEVICE_API_KEY = os.environ.get("RFID_API_KEY", "")
-STAFF = ["Admin", "Teacher"]
+STAFF = account_types.staff_roles()
 SOURCES = {"rfid", "camera"}
 SUPPORTED_SOURCES = {"rfid"}  # taps; camera results go through record_camera_result()
 # A device clock running ahead of the server by more than this is treated

@@ -183,7 +183,7 @@ def main():
             for path in ("/api/user/zz_mentor/verify", "/api/user/admin-create"):
                 check(f"non-staff refused on {path}", c.post(path, json={}).status_code == 403)
 
-        # the rules come from data (model/account_types.json), not code: change the data and
+        # the rules come from data (model/dataconfigs/account_types.json), not code: change the data and
         # the behaviour changes with it
         from model import account_types
         data = copy.deepcopy(account_types._data)
