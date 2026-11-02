@@ -107,6 +107,9 @@ class UserAPI:
             user_data['role'] = current_user.role
             user_data['is_admin'] = current_user.is_admin()
             user_data['is_teacher'] = current_user.is_teacher()
+            # Same flag as the login response: a limited account (a guest) has no Spring
+            # account or profile, so the navbar skips the Spring sign-in check for it
+            user_data['limited'] = account_types.allowed_requests(current_user.role) is not None
             return jsonify(user_data)
     
     class _BULK(Resource):  # Users API operation for Create, Read, Update, Delete 
