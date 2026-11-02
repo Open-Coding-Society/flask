@@ -47,6 +47,7 @@ from model.feedback import Feedback
 from api.analytics import get_date_range
 # from api.grade_api import grade_api
 from api.study import study_api
+from api.signup_options import signup_options_api
 from api.feedback_api import feedback_api
 from model.study import Study, initStudies
 from model.classroom import Classroom
@@ -70,6 +71,7 @@ load_dotenv()
 app.register_blueprint(python_exec_api)
 app.register_blueprint(javascript_exec_api)
 app.register_blueprint(user_api)
+app.register_blueprint(signup_options_api)
 app.register_blueprint(section_api)
 app.register_blueprint(persona_api)
 app.register_blueprint(skill_passport_api)
