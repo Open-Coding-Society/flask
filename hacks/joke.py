@@ -25,7 +25,10 @@ class JokesAPI:
     # getJoke(id)
     class _ReadID(Resource):
         def get(self, id):
-            return jsonify(getJoke(id))
+            joke = getJoke(id)
+            if joke is None:
+                return {'message': f'No joke with id {id}'}, 404
+            return jsonify(joke)
 
     # getRandomJoke()
     class _ReadRandom(Resource):
@@ -42,13 +45,15 @@ class JokesAPI:
     # put method: addJokeHaHa
     class _UpdateLike(Resource):
         def put(self, id):
-            addJokeHaHa(id)
+            if addJokeHaHa(id) is None:
+                return {'message': f'No joke with id {id}'}, 404
             return jsonify(getJoke(id))
 
     # put method: addJokeBooHoo
     class _UpdateJeer(Resource):
         def put(self, id):
-            addJokeBooHoo(id)
+            if addJokeBooHoo(id) is None:
+                return {'message': f'No joke with id {id}'}, 404
             return jsonify(getJoke(id))
 
     # building RESTapi resources/interfaces, these routes are added to Web Server

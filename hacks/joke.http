@@ -6,13 +6,18 @@ Accept: application/json
 GET {{baseUrl}}/api/jokes
 Accept: application/json
 
-### Read one joke - expect 200 and an array
+### Read one joke - expect 200 and an object
 GET {{baseUrl}}/api/jokes/14
 Accept: application/json
 
-### Update joke likes - expect 200 and an array
+### Update joke likes - expect 200 and the joke object
 PUT {{baseUrl}}/api/jokes/like/0
 Accept: application/json
 
-### Update joke jeers - expect 200 and an array
+### Update joke jeers - expect 200 and the joke object
 PUT {{baseUrl}}/api/jokes/jeer/0
+Accept: application/json
+
+### Read a joke that doesn't exist - expect 404 and a message
+GET {{baseUrl}}/api/jokes/9999
+Accept: application/json

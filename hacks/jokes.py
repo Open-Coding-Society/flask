@@ -73,8 +73,11 @@ def getJokes():
     return _read_jokes_file()
 
 def getJoke(id):
+    """The joke with this id, or None when there is no such joke."""
     jokes = _read_jokes_file()
-    return jokes[id]
+    if 0 <= id < len(jokes):
+        return jokes[id]
+    return None
 
 def getRandomJoke():
     jokes = _read_jokes_file()
@@ -107,6 +110,9 @@ def _vote_joke(id, field):
     with open(JOKES_FILE, 'r+') as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         jokes = json.load(f)
+        if not 0 <= id < len(jokes):  # no such joke: change nothing
+            fcntl.flock(f, fcntl.LOCK_UN)
+            return None
         jokes[id][field] += 1
         # Move file pointer to start before writing updated JSON
         f.seek(0)
