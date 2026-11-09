@@ -204,3 +204,35 @@ def token_required(roles=None):
     Existing code using @token_required will continue to work.
     '''
     return auth_required(roles)
+
+
+def get_current_user():
+    '''
+    The signed-in user for an endpoint where signing in is optional, or None.
+
+    Uses the same checks as auth_required (Flask-Login session first, then the JWT
+    cookie or Authorization header, matching token_version, not expired, active),
+    but never returns an error response: anyone it can't identify is anonymous.
+    Used by public endpoints such as the page microblog list, which show more to
+    signed-in users.
+    '''
+    if current_user.is_authenticated:
+        return current_user
+
+    token = request.cookies.get(current_app.config.get("JWT_TOKEN_NAME"))
+    if not token:
+        auth_header = request.headers.get('Authorization', '') or ''
+        token = auth_header.split(' ', 1)[1].strip() if auth_header.startswith('Bearer ') else auth_header.strip()
+    if not token:
+        return None
+
+    try:
+        data = jwt.decode(token, current_app.config["SECRET_KEY"], algorithms=["HS256"])
+    except jwt.InvalidTokenError:
+        return None
+    user = User.query.filter_by(_uid=data.get("_uid")).first()
+    if user is None or data.get("token_version", 0) != (user.token_version or 0):
+        return None
+    if user.expired() or not user.active:
+        return None
+    return user
