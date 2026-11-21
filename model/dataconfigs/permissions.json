@@ -3,7 +3,9 @@
     "anonymous",
     "Guest",
     "User",
-    "Mentor"
+    "Mentor",
+    "Teacher",
+    "Admin"
   ],
   "public": [
     "GET /",

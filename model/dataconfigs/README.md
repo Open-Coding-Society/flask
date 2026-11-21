@@ -105,7 +105,9 @@ that is not `"METHOD /route"`, and a `legacy_open` group with no owner or date.
 `python scripts/verify/verify_permissions.py` is the check to run whenever a route is added or changed. It fails when:
 
 - a route has no entry, or an entry has no route;
-- the file and the guard on a route say different things, in development or in production;
+- the file and the guard on a route say different things, in development or in production. Once `enforce`
+  names every caller the file may hold a route tighter than its guard does (that is how a route is closed from
+  data); it may never be looser;
 - a request not listed as open answers a caller with no account, when really called;
 - a `legacy_open` group is past its `review_by` date.
 

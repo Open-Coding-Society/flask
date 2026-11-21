@@ -3,7 +3,8 @@
 
   1. The loader refuses unclear data (a request in two lists, an unknown role, a group with no owner).
   2. Every request the app answers is in the file, and the file lists no request the app does not answer.
-  3. The file says the same as the guard written on each route, in development and in production.
+  3. The file says the same as the guard written on each route, in development and in production. Once the file is
+     enforced for every caller it may hold a route tighter than its guard does; it may never be looser.
   4. Every request the file does not list as open refuses a caller with no account, when really called.
   5. No legacy_open group is past its review date.
 
@@ -45,15 +46,39 @@ def coverage_problems(app_requests, listed):
            [f"{r} is in permissions.json and the app has no such route" for r in sorted(set(listed) - set(app_requests))]
 
 
-def mirror_problems(reconciled, who_may_call):
-    """Routes where the file and the guard in the code say different things, in either mode."""
+def no_looser(data, code):
+    """Whether everyone the file lets through, the guard in the code lets through too."""
+    if data == code:
+        return True
+    if isinstance(data, list):  # some roles: tighter than any login, than no guard, and than a longer list of roles
+        return code in ("anyone", "signed_in") or (isinstance(code, list) and set(data) <= set(code))
+    return data == "signed_in" and code == "anyone"
+
+
+def mirror_problems(reconciled, who_may_call, may_be_tighter=False):
+    """Routes where the file and the guard in the code say different things, in either mode.
+
+    While some callers are still in shadow mode the two must say the same. Once the file is enforced for everyone
+    (may_be_tighter) it may hold a route tighter than its guard, because the check before the route refuses first.
+    It may never be looser: the guard would still refuse, and the file would be wrong about the route.
+    """
     problems = []
     for record in reconciled:
         for mode, production in MODES.items():
             code, data = rec.who_may_call(record, mode), who_may_call(record["method"], record["rule"], production)
-            if code != data:
+            if code != data and not (may_be_tighter and no_looser(data, code)):
                 problems.append(f'{record["method"]} {record["rule"]} in {mode}: the code lets {code} through, the file says {data}')
     return problems
+
+
+def tighter_in_the_file(reconciled, who_may_call):
+    """Requests the file holds tighter than the guard in the code does, in production."""
+    held = []
+    for record in reconciled:
+        code, data = rec.who_may_call(record, "production"), who_may_call(record["method"], record["rule"], True)
+        if code != data and no_looser(data, code):
+            held.append(f'{record["method"]} {record["rule"]}')
+    return held
 
 
 def anonymous_problems(probes, who_may_call):
@@ -139,6 +164,24 @@ def main():
     check("mirror: a file that calls a guarded route open is reported, in both modes", len(mirror_problems(one, lambda m, r, production: "anyone")) == 2)
     check("mirror: a file that differs in one mode only is reported for that mode",
           mirror_problems(one, lambda m, r, production: "signed_in" if production else "anyone") == ["GET /a in development: the code lets signed_in through, the file says anyone"])
+    roles_route = rec.reconcile([{"method": "GET", "rule": "/a", "decorators": [{"name": "token_required", "args": ""}],
+                                  "guard": {"kind": "roles", "roles": None, "unknown": [], "runtime_roles": ["Admin", "Teacher"]}}], [], [])
+    open_route = rec.reconcile([{"method": "GET", "rule": "/a", "decorators": [], "guard": {"kind": "none", "roles": None, "unknown": [], "runtime_roles": None}}], [], [])
+    says = lambda who: (lambda m, r, production: who)
+    check("mirror: while anyone is in shadow mode, a file tighter than the guard is reported", len(mirror_problems(open_route, says("signed_in"))) == 2)
+    check("mirror: enforced for everyone, a file tighter than the guard is accepted: an open route held to a login, a login held to a role, a role list made shorter",
+          mirror_problems(open_route, says("signed_in"), True) == [] and mirror_problems(open_route, says(["Admin"]), True) == []
+          and mirror_problems(one, says(["Admin"]), True) == [] and mirror_problems(roles_route, says(["Admin"]), True) == [])
+    check("mirror: a file looser than the guard is reported even then: the guard would still refuse",
+          len(mirror_problems(one, says("anyone"), True)) == 2 and len(mirror_problems(roles_route, says("signed_in"), True)) == 2
+          and len(mirror_problems(roles_route, says(["Admin", "Mentor"]), True)) == 2 and len(mirror_problems(roles_route, says("anyone"), True)) == 2)
+    session_route = rec.reconcile([{"method": "GET", "rule": "/a", "decorators": [{"name": "login_required", "args": ""}],
+                                    "guard": {"kind": "login", "roles": None, "unknown": [], "runtime_roles": None}}], [], [])
+    check("mirror: a session page and a device route are never said to be something else", len(mirror_problems(session_route, says("signed_in"), True)) == 2
+          and len(mirror_problems(session_route, says(["Admin"]), True)) == 2
+          and len(mirror_problems(open_route, says("device_key"), True)) == 2 and len(mirror_problems(open_route, says(None), True)) == 2)
+    check("the requests the file holds tighter than the code are listed, and one it holds looser is not among them",
+          tighter_in_the_file(open_route, says("signed_in")) == ["GET /a"] and tighter_in_the_file(one, says("signed_in")) == [] and tighter_in_the_file(one, says("anyone")) == [])
     probe = lambda status, caller="anonymous", redirect=None: {"method": "GET", "rule": "/a", "mode": "production", "caller": caller, "status": status, "redirect": redirect}
     guarded_in_file = lambda m, r, production: "signed_in"
     check("anonymous: a guarded request that refuses, or sends to the login page, is fine",
@@ -156,8 +199,15 @@ def main():
     app_requests = [f'{r["method"]} {r["rule"]}' for r in inventory]
     problems = coverage_problems(app_requests, permissions.every_request())
     check(f"every one of the app's {len(app_requests)} requests is in the file, and the file lists nothing else", not problems, "; ".join(problems[:8]))
-    problems = mirror_problems(rec.reconcile(inventory, [], []), permissions.who_may_call)
-    check("the file says the same as the guard on every route, in development and in production", not problems, "; ".join(problems[:8]))
+    from model import account_types
+    callers = ["anonymous"] + sorted(set(account_types.assignable_roles()) | set(account_types.guest_roles()))
+    for_everyone = all(permissions.enforced(caller) for caller in callers)
+    reconciled = rec.reconcile(inventory, [], [])
+    problems = mirror_problems(reconciled, permissions.who_may_call, may_be_tighter=for_everyone)
+    check("the file says the same as the guard on every route, in development and in production"
+          + (", or holds the route tighter" if for_everyone else " (it may not be tighter while some callers are in shadow mode)"), not problems, "; ".join(problems[:8]))
+    if for_everyone:
+        print(f"      {len(tighter_in_the_file(reconciled, permissions.who_may_call))} requests are held tighter by the file than by the guard in the code")
 
     # ---- 4. really call every route with no account
     probes = prober.probe_project(list(MODES), callers=NO_USABLE_ACCOUNT)
