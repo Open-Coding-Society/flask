@@ -281,12 +281,12 @@ HTTPYac is needed for that.
 ### Event Operations
 | Method | Endpoint | Who | Description |
 |--------|----------|-----|-------------|
-| GET | `/api/event?page_path=X` or `?id=N` | anyone | One event, and what the caller can do with it (`viewer`). A page with no event, or a draft you can't see, is `{"event": null}`, not a 404 |
+| GET | `/api/event?page_path=X` or `?id=N` | anyone | One event, and what the caller can do with it (`viewer`). By `page_path`, a page with no event (or a draft you can't see) is `{"event": null}`, not a 404; an unknown `id` is a 404 |
 | GET | `/api/event?status=a,b&since=YYYY-MM-DD` | anyone | Public events by start, without their bodies. `?mine=true` lists the events you manage, drafts included |
 | GET | `/api/event/options` | anyone | The lifecycle, the event roles, file kinds and limits from `model/dataconfigs/event_rules.json` |
 | GET | `/api/event/files?id=N` | anyone | A file of an event you can see: pdf and images inline, Word and PowerPoint as a download |
 | POST | `/api/event` | Teacher, Admin | Create a draft from Mort's front matter keys plus `page_path` |
-| PUT, DELETE | `/api/event` | the event's managers | Change it (`{id, ...}`), or delete a draft nobody has joined (`{id}`) |
+| PUT, DELETE | `/api/event` | the event's managers | Change it (`{id, ...}`), or delete a draft with no people and no files (`{id}`) |
 | PUT | `/api/event/status` | the event's managers | Move it along the lifecycle (`{id, status}`) |
 | PUT, DELETE | `/api/event/rsvp` | signed in | RSVP (going, or the waitlist when it is full) or cancel (`{event_id}`) |
 | GET | `/api/event/checkin?event_id=N` | the event's managers | The check-in code for the screen, new every 5 minutes |
