@@ -15,7 +15,8 @@ On the server, from the Flask folder:
   docker compose exec web python scripts/remove_user.py MathMemer --apply
 
 What is removed with the user, without asking: their microblog posts, and the rows that only link them to
-something (their sections, personas, classrooms they are a student in, presence rooms they are in).
+something (their sections, personas, classrooms they are a student in, presence rooms they are in, events they
+signed up for). An account that owns an event stops the removal, like any other table that holds their rows.
 
 It refuses (STOP, nothing changed for that user) when:
   - no user has that uid,
@@ -39,7 +40,7 @@ from main import app, db  # registers every model
 from model import account_types
 
 # Rows that only link the user to something: removed with them
-LINKS = {"user_sections", "user_personas", "classroom_student", "presence_room_members"}
+LINKS = {"user_sections", "user_personas", "classroom_student", "presence_room_members", "event_participants"}
 # Content the user made that goes with them
 CONTENT = {"microblogs"}
 

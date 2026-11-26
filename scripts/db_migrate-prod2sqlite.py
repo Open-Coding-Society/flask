@@ -62,6 +62,7 @@ EXPORT_ENDPOINTS = {
     'elementary_leaderboard': '/api/export/elementary_leaderboard',
     'skill_snapshots':        '/api/export/skill_snapshots',
     'presence':               '/api/export/presence',  # one bundle, see model/presence_backup.py
+    'events':                 '/api/export/events',    # one bundle, see model/event_backup.py
 }
 
 # Data types that require paginated fetching
@@ -800,6 +801,15 @@ def load_presence(presence_data):
             print(f"    - {err}")
 
 
+def load_event_bundle(events_data):
+    """Event Service tables (events, participants, files), as one bundle. Not load_events: that is the leaderboard's."""
+    from model.event_backup import import_events
+    for table, stats in import_events(events_data or {}).items():
+        print(f"  {table}: {stats['imported']} imported, {stats['skipped']} skipped, {stats['failed']} failed")
+        for err in stats['errors'][:3]:
+            print(f"    - {err}")
+
+
 def load_all(all_data):
     """Load all data types into the local database in dependency order."""
     user_uid_map = {u.get('id'): u.get('uid') for u in all_data.get('users', []) if u.get('id') and u.get('uid')}
@@ -822,6 +832,7 @@ def load_all(all_data):
         ('skill_snapshots',
                           lambda: load_skill_snapshots(all_data.get('skill_snapshots', []))),
         ('presence',      lambda: load_presence(all_data.get('presence', {}))),
+        ('events',        lambda: load_event_bundle(all_data.get('events', {}))),
     ]
 
     for name, loader in loaders:

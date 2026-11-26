@@ -24,6 +24,8 @@ from model.presence import CameraCheck, PresenceEvent, PresencePeriod, PresenceR
 from model.presence_schedule import PresenceSchedule, PresenceScheduleBlock, PresenceScheduleOverride
 from model.rfid_tag import RfidTag
 from model.presence_backup import export_presence, import_presence
+from model.event import Event, EventFile, EventParticipant
+from model.event_backup import export_events, import_events
 from api.request_body import json_object
 
 data_export_import_api = Blueprint('data_export_import_api', __name__, url_prefix='/api/export')
@@ -68,6 +70,11 @@ MIGRATED_MODELS = {
     'presence_periods':            PresencePeriod,
     'presence_events':             PresenceEvent,
     'camera_checks':               CameraCheck,
+    # Event Service (exported/imported together as one 'events' bundle,
+    # see model/event_backup.py)
+    'events':                      Event,
+    'event_participants':          EventParticipant,
+    'event_files':                 EventFile,
 }
 
 
@@ -143,6 +150,7 @@ class ExportAllData(Resource):
                 'elementary_leaderboard': self._export_event_table(ElementaryLeaderboardEvent),
                 'skill_snapshots': self._export_skill_snapshots(),
                 'presence': export_presence(),
+                'events': export_events(),
             }
 
             # Add metadata
@@ -390,6 +398,10 @@ class ImportAllData(Resource):
             # 13. Presence system: rooms, schedules, tags, periods, events (depend on users)
             if 'presence' in data:
                 results['presence'] = import_presence(data['presence'])
+
+            # 14. Event Service: events, participants, files (depend on users)
+            if 'events' in data:
+                results['events'] = import_events(data['events'])
 
             return jsonify({
                 'message': 'Import completed',
@@ -1432,6 +1444,33 @@ class ImportPresence(Resource):
         return jsonify({'presence': summary, 'message': 'Presence import complete'})
 
 
+class ExportEvents(Resource):
+    """Export the Event Service's tables as one bundle (model/event_backup.py)."""
+    @token_required()
+    def get(self):
+        if g.current_user.role != account_types.admin_role():
+            return {'message': 'Admin privileges required'}, 403
+        return jsonify({'events': export_events()})
+
+
+class ImportEvents(Resource):
+    """Import the events bundle. Matches people by uid and events by page_path; skips rows that already exist."""
+    @token_required()
+    def post(self):
+        if g.current_user.role != account_types.admin_role():
+            return {'message': 'Admin privileges required'}, 403
+        data = json_object()
+        tables = import_events(data.get('events') or {})
+        summary = {
+            'imported': sum(t['imported'] for t in tables.values()),
+            'failed': sum(t['failed'] for t in tables.values()),
+            'skipped': sum(t['skipped'] for t in tables.values()),
+            'errors': [e for t in tables.values() for e in t['errors']],
+            'tables': tables,
+        }
+        return jsonify({'events': summary, 'message': 'Events import complete'})
+
+
 api.add_resource(ExportAllData, '/all')
 api.add_resource(ImportAllData, '/import')
 api.add_resource(ExportCounts, '/counts')
@@ -1451,6 +1490,7 @@ api.add_resource(ExportLeaderboard, '/leaderboard')
 api.add_resource(ExportElementaryLeaderboard, '/elementary_leaderboard')
 api.add_resource(ExportSkillSnapshots, '/skill_snapshots')
 api.add_resource(ExportPresence, '/presence')
+api.add_resource(ExportEvents, '/events')
 
 # Chunked import endpoints (POST to same paths as export)
 api.add_resource(ImportSections, '/import/sections')
@@ -1467,3 +1507,4 @@ api.add_resource(ImportLeaderboard, '/import/leaderboard')
 api.add_resource(ImportElementaryLeaderboard, '/import/elementary_leaderboard')
 api.add_resource(ImportSkillSnapshots, '/import/skill_snapshots')
 api.add_resource(ImportPresence, '/import/presence')
+api.add_resource(ImportEvents, '/import/events')
