@@ -144,7 +144,7 @@ DEFINITION_FIELDS = {
 SCHEDULE_KEYS = ('date', 'start_time', 'end_time', 'timezone')
 DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")  # [0-9], not \d, which takes other scripts' digits too
 CLOCK = re.compile(r"[0-9]{2}:[0-9]{2}")
-SITE_PATH_OR_HTTPS = re.compile(r"(/(?![/\\])|https://)\S*", re.IGNORECASE)  # never //host or /\host, which leave the site
+SITE_PATH_OR_HTTPS = re.compile(r"/(?![/\\])\S*|https://\S+", re.IGNORECASE)  # never //host or /\host, which leave the site
 GROUP = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
 # What a participant's RSVP and check-in can be. These are the service's own words, not data: pages read them.
@@ -390,10 +390,15 @@ class Event(db.Model):
             db.session.add(self)
             db.session.commit()
         except IntegrityError:
-            db.session.rollback()
-            existing = Event.by_page(values['page_path'])
-            raise EventError('page_taken', 409, page_path=values['page_path'], id=existing.id if existing else None)
+            Event._page_taken(values['page_path'])
         return self
+
+    @staticmethod
+    def _page_taken(page_path):
+        """After a unique page_path refused a save: roll back, and answer with the event that has it."""
+        db.session.rollback()
+        existing = Event.by_page(page_path)
+        raise EventError('page_taken', 409, page_path=page_path, id=existing.id if existing else None)
 
     # CRUD read: Mort's keys, the counts and the files. Never a person's name or uid, and never the secret.
     def read(self, for_user=None, include_body=True):
@@ -430,10 +435,14 @@ class Event(db.Model):
         self.require_manager(actor)
         self._require_open('edit')
         values = Event.validate(inputs, current=self)
-        self._apply(values)
-        self._updated_at = utc_now()
-        self._promote()  # a capacity that grew moves the waitlist up, first in, first out
-        db.session.commit()
+        page_path = values.get('page_path', self._page_path)
+        try:
+            self._apply(values)
+            self._updated_at = utc_now()
+            self._promote()  # a capacity that grew moves the waitlist up, first in, first out
+            db.session.commit()
+        except IntegrityError:
+            Event._page_taken(page_path)  # a draft moved onto another event's address
         return self
 
     # CRUD delete: only a draft that nobody has joined and that has no files
@@ -740,12 +749,13 @@ class Event(db.Model):
         if link is not None:
             return self._add_video(actor, group, kind, name, link)
 
-        filename = secure_filename(name) if isinstance(name, str) else ""
-        extension = filename.rsplit(".", 1)[1].lower() if "." in filename else ""
+        # The extension comes from the name as sent: secure_filename drops letters outside ASCII, which would lose it
+        sent = name.strip() if isinstance(name, str) else ""
+        extension = sent.rsplit(".", 1)[1].lower() if "." in sent else ""
         if extension not in rule['extensions']:
             raise EventError('bad_file_type', kind=kind, extensions=rule['extensions'])
-        if len(filename) > 255:
-            filename = filename[:255 - len(extension) - 1] + "." + extension
+        stem = secure_filename(sent.rsplit(".", 1)[0])[:255 - len(extension) - 1] or "file"
+        filename = f"{stem}.{extension}"  # a safe name, up to 255 characters, that keeps its type
         data = Event._decode(content)
         if len(data) > rule['max_bytes']:
             raise EventError('too_big', 413, size=_size_words(rule['max_bytes']))

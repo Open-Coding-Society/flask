@@ -9,7 +9,7 @@ stray JSON file). The real dev DB is checksummed before and after to prove it wa
 
 Every check has a number and prints one line for each thing it proves, so a failure is easy to find.
 
-Usage:  python scripts/verify/verify_events.py        (from the flask repo root; about 15 seconds)
+Usage:  python scripts/verify/verify_events.py        (from the flask repo root; about 5 seconds)
 Exit:   0 all checks passed, 1 otherwise.
 """
 import base64, copy, hashlib, io, json, logging, os, re, secrets, socket, sys, tempfile, time, warnings, zipfile
@@ -297,6 +297,9 @@ def main():
             saved["page_taken"] = body_of(r)
             check(4, "the same page_path again is 409 with the existing event's id",
                   r.status_code == 409 and code_of(r) == "page_taken" and body_of(r).get("id") == ids["e1"], f"{r.status_code} {body_of(r)}")
+            r = teacher.put("/api/event", json={"id": ids["march"], "page_path": E1})
+            check(4, "moving another draft onto that page_path is 409 with the existing event's id too",
+                  r.status_code == 409 and code_of(r) == "page_taken" and body_of(r).get("id") == ids["e1"], f"{r.status_code} {body_of(r)}")
 
         with checking(5):
             cases = [
@@ -323,6 +326,8 @@ def main():
                 ("categories that are not text", {"categories": [1, 2]}, "bad_field"),
                 ("alert_days 400", {"alert_days": 400}, "bad_field"),
                 ('presentation "javascript:alert(1)"', {"presentation": "javascript:alert(1)"}, "bad_field"),
+                ('an image link to another site written //host', {"image": "//evil.test/x.png", "image_alt": "x"}, "bad_field"),
+                ('an image with no image_alt', {"image": "/images/workshop.png"}, "bad_alt"),
             ]
             for number, (label, change, code) in enumerate(cases):
                 body = mort(f"/events/verify-bad-{number}/")
@@ -577,6 +582,9 @@ def main():
             check(27, "the docx downloads as an attachment with its name", r.status_code == 200 and disposition.startswith("attachment") and "handout.docx" in disposition, disposition)
             r = anon.get("/api/event/files", query_string={"id": ids["pdf"]})
             check(27, "the pdf opens inline", r.status_code == 200 and r.mimetype == "application/pdf" and r.headers.get("Content-Disposition", "").startswith("inline"), dict(r.headers))
+            r = upload(teacher, ids["e1"], "document", "Повестка дня.PDF", PDF, group="workshop-agenda")
+            check(27, "a file name in another alphabet keeps its type: a safe name ending in .pdf",
+                  r.status_code == 201 and (body_of(r).get("file") or {}).get("name", "").endswith(".pdf"), f"{r.status_code} {body_of(r)}")
 
         with checking(28):
             r = alice.delete("/api/event/files", json={"id": ids["docx"]})
