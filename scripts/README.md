@@ -1,7 +1,8 @@
 # scripts/
 
-This file lists the **access-control (RBAC) scripts**: what each one is, why it exists, and when to run it. The older
-`verify_*.py` and `db_*.py` scripts are not listed here yet; each has its purpose in the docstring at the top of the file.
+This file lists the **access-control (RBAC) scripts** and `verify/verify_events.py`: what each one is, why it exists, and
+when to run it. The older `verify_*.py` and `db_*.py` scripts are not listed here yet; each has its purpose in the docstring
+at the top of the file.
 
 None of these scripts is part of the running app, and nothing in the app imports them. Run each from the repo root.
 
@@ -47,6 +48,7 @@ outside the repo with `--out` and do not commit or post them. With no `--out` th
 
 | Script | What it does | Why it exists | When to run | Takes |
 |---|---|---|---|---|
+| `verify/verify_events.py` | Checks the Event Service (`/api/event`) end to end on a throwaway database with the network off: the `event_rules.json` loader, drafts staying private, RSVPs with capacity and a waitlist, QR check-in, files and video links (S3 with a fake client), the backup bundle, the `permissions.json` entries and the error codes. 46 numbered checks. | An event's rules only show in a sequence (publish, open registration, fill it, check in), and every refusal must carry the code a page words it by. | After changing `api/event.py`, a `model/event*.py` file or `event_rules.json`, and before merging. | 5 s |
 | `rbac/rbac_inventory.py` | Lists every route and what the code says guards it: the decorators, the role list the running app holds, what the function itself checks about the caller. Reads only; never calls a route. | Nobody can see the guards of all 250 method-and-route pairs at once. This is the written side of the evidence. | To see how every route is guarded, after adding or changing routes, and as input to `rbac_reconcile.py`. | 3 s |
 | `rbac/rbac_fixture_app.py` | A tiny app with one route for each way this project guards (or fails to guard) a route. | Gives `verify_rbac_inventory.py` known answers to check the inventory against. | Never on its own. | n/a |
 | `verify/run_all.py` | Runs every `verify_*.py` one after the other, each in its own process, and prints pass or FAIL with the seconds for each. | So there is one command that says whether anything is broken, instead of knowing the names of 21 scripts. | Before opening a pull request, and after changing a route, a guard or a data file. | 5 to 6 min |

@@ -1,8 +1,8 @@
 """Where event files are kept: on the server's disk, or in S3 when it is set up.
 
 EventFileStore keeps files under instance/data/events, on the instance volume. It is not instance/uploads on
-purpose: GET /uploads/<path> serves that folder to anyone, and an event's files follow the event's own rules
-(a draft's files only reach its managers, see Event.visible_to).
+purpose: GET /uploads/<path> serves that folder by path alone, and an event's files follow the event's own
+rules (a draft's files only reach its managers, see Event.visible_to).
 
 S3EventFileStore is used instead when AWS_BUCKET_NAME, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are all
 set. They are Spring's names for the same bucket, so one .env serves both. AWS_REGION (default us-east-1) and
