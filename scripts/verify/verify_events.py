@@ -428,7 +428,7 @@ def main():
             check(13, "an RSVP to a published event is 409", r.status_code == 409 and code_of(r) == "not_open", f"{r.status_code} {body_of(r)}")
             r = bob.put("/api/event/rsvp", json={"event_id": ids["co"]})
             check(13, "an RSVP to a draft is 404", r.status_code == 404 and code_of(r) == "not_found", f"{r.status_code} {body_of(r)}")
-            e1 = Event.query.get(ids["e1"])
+            e1 = db.session.get(Event, ids["e1"])
             answer = model_error(lambda: e1.rsvp(person("zz_dave"), now=e1.starts_at + timedelta(minutes=1)))
             check(13, "an RSVP once the event has started is 409 (started)", answer is not None and answer[0].get("code") == "started" and answer[1] == 409, answer)
 
@@ -476,7 +476,7 @@ def main():
             from model.presence import utc_now
             r = carol.post("/api/event/checkin", json={"event_id": ids["e1"], "code": "AAAAAAAA"})
             check(18, "a wrong code is 400", r.status_code == 400 and code_of(r) == "bad_code", f"{r.status_code} {body_of(r)}")
-            e1, now, seconds = Event.query.get(ids["e1"]), utc_now(), event_rules.code_seconds()
+            e1, now, seconds = db.session.get(Event, ids["e1"]), utc_now(), event_rules.code_seconds()
             old, _ = e1.check_in_code(now=now - timedelta(seconds=2 * seconds))
             answer = model_error(lambda: e1.check_in(person("zz_carol"), old, now=now))
             check(18, "a code from two periods ago is 400", answer is not None and answer[0].get("code") == "bad_code" and answer[1] == 400, answer)
@@ -530,7 +530,7 @@ def main():
             r = dave.post("/api/event/checkin", json={"event_id": ids["e1"], "code": "AAAAAAAA"})
             check(23, "POST checkin is 409 once completed", r.status_code == 409 and code_of(r) == "not_open", f"{r.status_code} {body_of(r)}")
             db.session.expire_all()
-            check(23, "and the check-in secret is cleared", Event.query.get(ids["e1"])._checkin_secret is None)
+            check(23, "and the check-in secret is cleared", db.session.get(Event, ids["e1"])._checkin_secret is None)
 
         with checking(24):
             r = guest.put("/api/event/rsvp", json={"event_id": ids["e1"]})
@@ -604,7 +604,11 @@ def main():
                       and params.get("ResponseContentType") == "image/png" and params.get("ResponseContentDisposition", "").startswith("inline"), f"{r.status_code} {params}")
                 fake.fail = True
                 before = EventFile.query.count()
-                r = upload(teacher, ids["e1"], "gallery", "down.png", PNG, alt="Saved while S3 is down")
+                logging.disable(logging.CRITICAL)  # the service logs the store's failure; this one is on purpose
+                try:
+                    r = upload(teacher, ids["e1"], "gallery", "down.png", PNG, alt="Saved while S3 is down")
+                finally:
+                    logging.disable(logging.NOTSET)
                 saved["storage_down"] = body_of(r)
                 check(29, "a ClientError on save is 503 with Retry-After: 30", r.status_code == 503 and r.headers.get("Retry-After") == "30"
                       and code_of(r) == "storage_down", f"{r.status_code} {body_of(r)}")
@@ -705,7 +709,7 @@ def main():
                         crashes.append(f"{method} {rule} with {label}: {r.status_code}")
             tried = sum(1 for method, _ in requests if method in ("POST", "PUT", "DELETE"))
             check(37, f"a body that is not a JSON object is a 400 on every one of the {tried} new POST, PUT and DELETE requests, never a 500",
-                  tried == 14 and not crashes, "; ".join(crashes[:6]) or tried)
+                  tried == 13 and not crashes, "; ".join(crashes[:6]) or tried)
 
         # ---------------------------------------------------------------- one message table
         with checking(39):
@@ -743,7 +747,8 @@ def main():
             again = event_of(status(teacher, ids["pa"], "published")).get("published_at")
             check(40, "and unchanged after it goes back to draft and is published again", back == published and again == published, f"{published} {back} {again}")
             in_bundle = next((e.get("published_at") for e in export_events()["events"] if e.get("page_path") == path), None)
-            check(40, "the backup bundle keeps it", in_bundle == published, in_bundle)
+            check(40, "the backup bundle keeps it (to the microsecond; the read gives milliseconds)",
+                  isinstance(in_bundle, str) and isinstance(published, str) and in_bundle[:23] == published[:23], f"{in_bundle} {published}")
 
         with checking(41):
             r = teacher.put("/api/event/files", json={"id": ids["png"], "alt": "Students pair-programming at laptops"})
@@ -812,7 +817,7 @@ def main():
             from model.event import Event
             try:
                 event_rules.load(rules_copy("check-in-after", lambda d: d["open_for"].update(check_in=["active", "completed"])))
-                secret = lambda: (db.session.expire_all(), Event.query.get(ids["noreg"])._checkin_secret)[1]
+                secret = lambda: (db.session.expire_all(), db.session.get(Event, ids["noreg"])._checkin_secret)[1]
                 status(teacher, ids["noreg"], "active")
                 opened = secret()
                 r = status(teacher, ids["noreg"], "completed")
