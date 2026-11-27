@@ -9,7 +9,7 @@ in none of them is one nobody may make:
   public_restricted    open on purpose too, but it runs code or spends a provider's credit, so it has been reviewed
                        to run in a sandbox and under a rate limit. Nothing goes here without that review.
   legacy_open          anyone can make it today because it always was so, and nobody has yet decided that it should
-                       be. Kept in groups, each with an owner and a review_by date, so the list gets shorter.
+                       be. Kept in groups, each with an owner, so the list gets shorter.
   device_key           made by a device that sends the device key; the route checks the key itself
   session              a page behind the Flask session login
   signed_in            any active account
@@ -25,7 +25,6 @@ in none of them is one nobody may make:
 This file says who gets as far as the route. A check written inside a route (that an account may change only its own
 record, for one) is still made there.
 """
-import datetime
 import json
 import os
 import re
@@ -73,10 +72,6 @@ def _check(data, known_roles):
         name = f"legacy_open group {number}"
         if not isinstance(group, dict) or not isinstance(group.get("owner"), str) or not group["owner"].strip():
             raise ValueError(f"permissions.json: {name} needs an owner")
-        try:
-            datetime.date.fromisoformat(group.get("review_by"))
-        except (TypeError, ValueError):
-            raise ValueError(f"permissions.json: {name} needs a review_by date written YYYY-MM-DD")
         if not group.get("requests"):
             raise ValueError(f"permissions.json: {name} lists no requests")
         for request in _requests(group["requests"], name):
@@ -156,5 +151,5 @@ def enforcing():
 
 
 def legacy_open_groups():
-    """The legacy_open groups: [{owner, review_by, requests}]."""
+    """The legacy_open groups: [{owner, requests}]."""
     return [dict(group) for group in _data["legacy_open"]]

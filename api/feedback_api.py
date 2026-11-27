@@ -2,6 +2,7 @@ import os
 import requests
 from flask import Blueprint, jsonify, session
 from flask_restful import Api, Resource
+from api.authorize import identify
 from model.feedback import Feedback
 from __init__ import app, db
 from api.request_body import json_object
@@ -73,6 +74,14 @@ class FeedbackAPI:
         
     class _UserFeedback(Resource):
         def get(self, uid):
+            # permissions.json lets any signed-in account reach this route; whose feedback it may read is
+            # decided here: an account's own, or any account's for an Admin.
+            caller, no_login = identify()
+            if caller is None:
+                return no_login
+            if caller.uid != uid and not caller.is_admin():
+                return {"message": "You can only see your own feedback."}, 403
+
             feedbacks = Feedback.query.filter_by(github_username=uid).order_by(Feedback.created_at.desc()).all()
 
             headers = {

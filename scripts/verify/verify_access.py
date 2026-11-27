@@ -6,9 +6,10 @@ model/dataconfigs/permissions.json changes no answer the app gives today.
      in it never fails a request in shadow mode. Then who is calling, on this app with a throwaway database: a
      token, a session, a token from before a password change, and that it is worked out once for each request.
   2. This project in shadow mode, every route as every kind of caller in both modes: the decision made from the
-     file is the one the route's own guard makes, for every call.
+     file is the one the route's own guard makes, for every call, except for the requests in HELD_TIGHTER.
   3. The same calls with the file enforced for everyone, and enforced as the file is committed when that is
-     something in between: every answer is the same as in shadow mode. This is the gate for turning enforcement on.
+     something in between: every answer is the same as in shadow mode, except that a caller the file does not let
+     make a request in HELD_TIGHTER is now refused, 401 or 403. This is the gate for turning enforcement on.
   4. What only enforcement gives: a route that is in no list refuses everyone, and an open route is closed by
      moving its entry, with no change to the code.
 
@@ -30,6 +31,36 @@ import rbac_reconcile as rec
 
 POLICY = "model/dataconfigs/permissions.json"
 _failures = []
+
+# Requests the file holds tighter than the route's own guard, on purpose: each was open to anyone, or to any
+# account, until legacy_open was sorted, and the file now says who may make it. The check before the route refuses
+# first, so for these and only these an answer changes when enforcement is on, from what the route gave to a refusal.
+# The list is exact: a request that is tightened without being added here fails the gate, and so does an entry
+# whose answers do not change.
+HELD_TIGHTER = [
+    "GET /api/analytics/github/org/<string:org_name>/repos",
+    "GET /api/analytics/github/org/<string:org_name>/users",
+    "GET /api/feedback/all",
+    "GET /api/feedback/user/<string:uid>",
+    "GET /api/groq/health",
+    "GET /api/groq/models",
+    "GET /api/persona",
+    "GET /api/persona/<int:id>",
+    "GET /api/post/<int:post_id>",
+    "GET /api/post/all",
+    "GET /api/post/page",
+    "GET /api/post/user/<int:user_id>",
+    "GET /api/study",
+    "GET /api/study/stats",
+    "GET /uploads/<path:filename>",
+    "POST /api/groq",
+    "POST /api/groq/analyze",
+    "POST /api/groq/chat",
+    "POST /api/persona/evaluate-group",
+    "POST /api/persona/form-groups",
+    "POST /api/study",
+    "PUT /update_user/<string:uid>",
+]
 
 
 def check(label, cond, detail=""):
@@ -69,15 +100,32 @@ def decision_problems(inventory, probes):
         # a device route is left to its own guard, which checks the key: the check before it lets every caller through
         through = True if guard["kind"] == "device_key" else rec.expected(guard, probe["caller"], probe["role"])
         decision = probe["decision"]
-        if decision is None or decision["allow"] != through:
+        held_tighter = f'{probe["method"]} {probe["rule"]}' in HELD_TIGHTER and through and decision is not None and not decision["allow"]
+        if (decision is None or decision["allow"] != through) and not held_tighter:
             problems.append(f'{probe["method"]} {probe["rule"]} in {probe["mode"]} as {probe["caller"]}: the guard says {"pass" if through else "refuse"}, '
                             f'the file says {None if decision is None else ("pass" if decision["allow"] else "refuse")}')
     return problems
 
 
-def different_answers(before, after):
+def unexpected_changes(before, after):
+    """(changes nobody listed, changes that are not a refusal, requests in HELD_TIGHTER whose answers did not change).
+
+    The answers may differ only for a request in HELD_TIGHTER, and only to a 401 or 403 from the check.
+    """
     one, two = answers(before), answers(after)
-    return [f"{' '.join(map(str, key))}: {one.get(key)} became {two.get(key)}" for key in sorted(set(one) | set(two), key=str) if one.get(key) != two.get(key)]
+    unlisted, not_refused, changed = [], [], set()
+    for key in sorted(set(one) | set(two), key=str):
+        if one.get(key) == two.get(key):
+            continue
+        request = f"{key[1]} {key[2]}"
+        text = f"{' '.join(map(str, key))}: {one.get(key)} became {two.get(key)}"
+        if request not in HELD_TIGHTER:
+            unlisted.append(text)
+        elif two.get(key) is None or two[key][0] not in (401, 403):
+            not_refused.append(text)
+        else:
+            changed.add(request)
+    return unlisted, not_refused, sorted(set(HELD_TIGHTER) - changed)
 
 
 class Captured(logging.Handler):
@@ -271,24 +319,26 @@ def main():
           len(shadow) > 4000 and all(r["decision"] is not None and not r["decision"].get("enforced") for r in shadow))
     problems = decision_problems(inventory, shadow)
     check("shadow mode: the decision made from the file is the one the route's guard makes, for every call", not problems, f"{len(problems)}: " + "; ".join(problems[:6]))
-    would_refuse = [r for r in shadow if not r["decision"]["allow"] and rec.observed(r) != "refused"]
-    check("shadow mode: no call the file would refuse was answered by its route, so nothing is logged", not would_refuse,
+    would_refuse = [r for r in shadow if not r["decision"]["allow"] and rec.observed(r) != "refused" and f'{r["method"]} {r["rule"]}' not in HELD_TIGHTER]
+    check("shadow mode: no call the file would refuse was answered by its route, so nothing is logged, except the requests in HELD_TIGHTER", not would_refuse,
           "; ".join(f'{r["method"]} {r["rule"]} {r["caller"]}' for r in would_refuse[:6]))
 
     # ---- 3. enforced for everyone: the gate
     enforced = prober.probe_project(modes, overlay={POLICY: policy(enforce=everyone())})
-    differences = different_answers(shadow, enforced)
-    check(f"enforced for everyone: all {len(enforced)} answers are the same as in shadow mode", len(enforced) == len(shadow) and not differences,
-          f"{len(differences)}: " + "; ".join(differences[:6]))
+    unlisted, not_refused, unchanged = unexpected_changes(shadow, enforced)
+    check(f"enforced for everyone: of {len(enforced)} answers, none is different from shadow mode except for the requests in HELD_TIGHTER",
+          len(enforced) == len(shadow) and not unlisted, f"{len(unlisted)}: " + "; ".join(unlisted[:6]))
+    check(f"enforced for everyone: and for those {len(HELD_TIGHTER)} requests the only change is a 401 or 403 from the check", not not_refused, "; ".join(not_refused[:6]))
+    check("enforced for everyone: every request in HELD_TIGHTER is refused to someone it was not before, so the list is not out of date", not unchanged, "; ".join(unchanged))
     refused_here = [r for r in enforced if not r["decision"]["allow"]]
     check("enforced: every refusal is now made by the check, before the route", refused_here and all(r["decision"].get("enforced") for r in refused_here))
 
     committed = json.loads(policy())["enforce"]
     if committed and sorted(committed) != sorted(everyone()):
         as_committed = prober.probe_project(modes)
-        differences = different_answers(shadow, as_committed)
-        check(f"enforced as the file is committed, for {', '.join(committed)}: all {len(as_committed)} answers are the same as in shadow mode",
-              len(as_committed) == len(shadow) and not differences, f"{len(differences)}: " + "; ".join(differences[:6]))
+        unlisted, not_refused, _ = unexpected_changes(shadow, as_committed)
+        check(f"enforced as the file is committed, for {', '.join(committed)}: of {len(as_committed)} answers, none is different from shadow mode except for the requests in HELD_TIGHTER, which are refused",
+              len(as_committed) == len(shadow) and not unlisted and not not_refused, f"{len(unlisted) + len(not_refused)}: " + "; ".join((unlisted + not_refused)[:6]))
         refused_here = [r for r in as_committed if not r["decision"]["allow"]]
         kinds = {r["decision"]["caller"] for r in refused_here if r["decision"].get("enforced")}
         check("and the check refuses only the callers the file names", kinds == set(committed) & {r["decision"]["caller"] for r in refused_here}, str(sorted(kinds)))
@@ -320,22 +370,23 @@ def main():
             (data["roles"][target[6:]] if target.startswith("roles.") else data[target]).append(request)
         return change
 
-    open_today = "GET /api/jokes/"
-    def jokes_with(target):
+    # a request that is still in legacy_open: the NPC game's connection test, which answers whoever asks
+    open_today, open_rule = "GET /api/ainpc/test", "/api/ainpc/test"
+    def open_route_with(target):
         overlay = {POLICY: policy(move(open_today, "legacy_open", target), enforce=everyone())}
-        return {r["caller"]: r["status"] for r in prober.probe_project(["production"], only="/api/jokes/", overlay=overlay) if r["rule"] == "/api/jokes/" and r["method"] == "GET"}
+        return {r["caller"]: r["status"] for r in prober.probe_project(["production"], only=open_rule, overlay=overlay) if r["rule"] == open_rule and r["method"] == "GET"}
 
-    in_shadow = [r for r in prober.probe_project(["production"], only="/api/jokes/", overlay={POLICY: policy(move(open_today, "legacy_open", "signed_in"), enforce=[])})
-                 if r["rule"] == "/api/jokes/" and r["method"] == "GET"]
+    in_shadow = [r for r in prober.probe_project(["production"], only=open_rule, overlay={POLICY: policy(move(open_today, "legacy_open", "signed_in"), enforce=[])})
+                 if r["rule"] == open_rule and r["method"] == "GET"]
     # a guest is held to its own short list of requests whatever this file says, so it is left out
     check("in shadow mode a route the file would close still answers as before, and the check itself changes nothing: an expired account's call writes nothing",
           len(in_shadow) == len(prober.CALLERS) and all(r["status"] == 200 for r in in_shadow if r["caller"] != "guest") and not any(r["wrote"] for r in in_shadow)
           and not {r["caller"]: r for r in in_shadow}["expired_guest"]["decision"]["allow"], str({r["caller"]: (r["status"], r["wrote"]) for r in in_shadow}))
-    jokes = jokes_with("signed_in")
+    open_answers = open_route_with("signed_in")
     check("an open route is closed by moving its entry to signed_in, with no change to the code: 401 without an account, 403 for an inactive one, answered for an active one",
-          jokes["anonymous"] == 401 and jokes["invalid_token"] == 401 and jokes["inactive_mentor"] == 403 and jokes["expired_guest"] == 403
-          and jokes["user"] == 200 and jokes["admin"] == 200, str(jokes))
-    staff = jokes_with("roles.Admin")
+          open_answers["anonymous"] == 401 and open_answers["invalid_token"] == 401 and open_answers["inactive_mentor"] == 403 and open_answers["expired_guest"] == 403
+          and open_answers["user"] == 200 and open_answers["admin"] == 200, str(open_answers))
+    staff = open_route_with("roles.Admin")
     check("and held to one role by moving it to that role's list", staff["user"] == 403 and staff["teacher"] == 403 and staff["admin"] == 200 and staff["anonymous"] == 401, str(staff))
 
     print(f"\n{len(_failures)} failed" if _failures else "\nall checks passed")

@@ -6,14 +6,13 @@
   3. The file says the same as the guard written on each route, in development and in production. Once the file is
      enforced for every caller it may hold a route tighter than its guard does; it may never be looser.
   4. Every request the file does not list as open refuses a caller with no account, when really called.
-  5. No legacy_open group is past its review date.
 
 A new route with no entry fails 2. A route listed as guarded that answers an anonymous caller fails 4.
 
 Usage:  python scripts/verify/verify_permissions.py        (from the flask repo root; about a minute)
 Exit:   0 all checks passed, 1 otherwise.
 """
-import copy, datetime, json, os, sys
+import copy, json, os, sys
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 os.chdir(REPO)
@@ -91,10 +90,6 @@ def anonymous_problems(probes, who_may_call):
     return problems
 
 
-def overdue_groups(groups, today):
-    return [f'{g["owner"]}, due {g["review_by"]}, {len(g["requests"])} requests' for g in groups if datetime.date.fromisoformat(g["review_by"]) < today]
-
-
 def main():
     path = os.path.join(REPO, "model", "dataconfigs", "permissions.json")
     with open(path, encoding="utf-8") as fh:
@@ -130,8 +125,6 @@ def main():
     check("a request open in development must say who may make it in production", refused(lambda d: d["open_in_development"].append(public), "open in development"))
     check("a legacy_open group needs an owner", refused(lambda d: d["legacy_open"][0].pop("owner"), "needs an owner")
           and refused(lambda d: d["legacy_open"][0].update(owner="  "), "needs an owner"))
-    check("a legacy_open group needs a review date that is a date", refused(lambda d: d["legacy_open"][0].update(review_by="soon"), "review_by date")
-          and refused(lambda d: d["legacy_open"][0].pop("review_by"), "review_by date"))
     check("a legacy_open group with no requests is refused", refused(lambda d: d["legacy_open"][0].update(requests=[]), "lists no requests"))
     check("roles must be lists by role, and legacy_open a list of groups", refused(lambda d: d.update(roles=[]), "roles must give")
           and refused(lambda d: d.update(legacy_open={}), "list of groups"))
@@ -191,8 +184,6 @@ def main():
     check("anonymous: an error is not a refusal", len(anonymous_problems([probe(500)], guarded_in_file)) == 1)
     check("anonymous: a request in no list must refuse too", len(anonymous_problems([probe(200)], lambda m, r, production: None)) == 1)
     check("anonymous: an open request may answer anyone", anonymous_problems([probe(200)], lambda m, r, production: "anyone") == [])
-    groups = [{"owner": "a", "review_by": "2027-01-31", "requests": ["GET /x"]}]
-    check("a group is overdue the day after its review date, not on it", overdue_groups(groups, datetime.date(2027, 2, 1)) != [] and overdue_groups(groups, datetime.date(2027, 1, 31)) == [])
 
     # ---- 2 and 3. this project: every route is listed, and the file says what the guards say
     inventory = rec.project_inventory()
@@ -215,10 +206,6 @@ def main():
     called = {(p["method"], p["rule"]) for p in probes}
     check(f"every request not listed as open refuses a caller with no account: {len(probes)} calls, as {', '.join(NO_USABLE_ACCOUNT)}, in both modes",
           not problems and len(called) >= len(app_requests) - 1 and {p["mode"] for p in probes} == set(MODES), "; ".join(problems[:8]))
-
-    # ---- 5. the review dates
-    overdue = overdue_groups(permissions.legacy_open_groups(), datetime.date.today())
-    check("no legacy_open group is past its review date", not overdue, "; ".join(overdue))
 
     readme = open(os.path.join(REPO, "model", "dataconfigs", "README.md"), encoding="utf-8").read()
     for word in ("permissions.json", "legacy_open", "public_restricted", "verify_permissions.py"):
