@@ -86,8 +86,8 @@ DOCX = zip_holding("[Content_Types].xml", "word/document.xml")
 NOT_A_DOCX = zip_holding("notes.txt")
 
 
-def mort(page_path, **changes):
-    """Mort's example event from pages#2089, dated FUTURE. layout is his front matter key that the service drops."""
+def workshop_event(page_path, **changes):
+    """The example event from pages#2089, dated FUTURE. layout is a front matter key the service drops."""
     body = {
         "layout": "event",
         "page_path": page_path,
@@ -268,15 +268,15 @@ def main():
 
         # ---------------------------------------------------------------- creating an event
         with checking(2):
-            r = anon.post("/api/event", json=mort(E1))
+            r = anon.post("/api/event", json=workshop_event(E1))
             check(2, "POST signed out is 401", r.status_code == 401, r.status_code)
-            r = alice.post("/api/event", json=mort(E1))
+            r = alice.post("/api/event", json=workshop_event(E1))
             check(2, "POST as a student is 403", r.status_code == 403, r.status_code)
-            r = teacher.post("/api/event", json=mort(E1))
+            r = teacher.post("/api/event", json=workshop_event(E1))
             event = event_of(r)
             ids["e1"] = event.get("id")
             check(2, "POST as a teacher is 201", r.status_code == 201, f"{r.status_code} {body_of(r)}")
-            check(2, "the event starts as a draft and answers with Mort's keys",
+            check(2, "the event starts as a draft and answers with the event front matter keys",
                   event.get("status") == "draft" and event.get("page_path") == E1 and event.get("title") == "Community Technology Workshop"
                   and event.get("date") == FUTURE and event.get("start_time") == "10:00" and event.get("end_time") == "13:00"
                   and event.get("timezone") == "America/Los_Angeles" and event.get("registration") == {"enabled": True, "capacity": 50}
@@ -284,11 +284,11 @@ def main():
             check(2, "the rest of the definition is kept: description, location, attachments, body",
                   event.get("description") == "An introduction to practical AI." and event.get("event_type") == "workshop"
                   and event.get("location") == {"name": "Community Center", "address": "Poway, California"}
-                  and event.get("attachments") == mort(E1)["attachments"] and event.get("body") == "## Agenda\n\nBring a laptop.", event)
+                  and event.get("attachments") == workshop_event(E1)["attachments"] and event.get("body") == "## Agenda\n\nBring a laptop.", event)
             check(2, "a key the service does not keep (layout) is dropped", r.status_code == 201 and "layout" not in event)
 
         with checking(3):
-            r = teacher.post("/api/event", json=mort("/events/verify-march/", date="2027-03-15", registration={"enabled": False}))
+            r = teacher.post("/api/event", json=workshop_event("/events/verify-march/", date="2027-03-15", registration={"enabled": False}))
             event = event_of(r)
             ids["march"] = event.get("id")
             check(3, "2027-03-15 10:00-13:00 in America/Los_Angeles is 17:00Z to 20:00Z (daylight time)",
@@ -301,7 +301,7 @@ def main():
             check(3, "a start with no end lasts to the end of that day", event.get("ends_at") == "2026-12-06T08:00:00.000Z", event)
 
         with checking(4):
-            r = teacher.post("/api/event", json=mort(E1))
+            r = teacher.post("/api/event", json=workshop_event(E1))
             saved["page_taken"] = body_of(r)
             check(4, "the same page_path again is 409 with the existing event's id",
                   r.status_code == 409 and code_of(r) == "page_taken" and body_of(r).get("id") == ids["e1"], f"{r.status_code} {body_of(r)}")
@@ -338,7 +338,7 @@ def main():
                 ('an image with no image_alt', {"image": "/images/workshop.png"}, "bad_alt"),
             ]
             for number, (label, change, code) in enumerate(cases):
-                body = mort(f"/events/verify-bad-{number}/")
+                body = workshop_event(f"/events/verify-bad-{number}/")
                 body.update(change)
                 r = teacher.post("/api/event", json=body)
                 check(5, f"{label} is a 400 ({code})", r.status_code == 400 and code_of(r) == code, f"{r.status_code} {body_of(r)}")
@@ -390,7 +390,7 @@ def main():
                   ids["e1"] in [e.get("id") for e in listed] and all("body" not in e for e in listed), body_of(r))
             r = status(alice, ids["e1"], "registration")
             check(8, "alice, who does not organize it, gets 403", r.status_code == 403 and code_of(r) == "not_manager", f"{r.status_code} {body_of(r)}")
-            r = teacher.post("/api/event", json=mort("/events/verify-co-organizer/"))
+            r = teacher.post("/api/event", json=workshop_event("/events/verify-co-organizer/"))
             ids["co"] = event_of(r).get("id")
             r = teacher.put("/api/event/participants", json={"event_id": ids["co"], "uid": "zz_alice", "role": "organizer"})
             check(8, "the teacher makes alice an organizer of a new draft", r.status_code == 200 and (body_of(r).get("participant") or {}).get("role") == "organizer", body_of(r))
@@ -399,7 +399,7 @@ def main():
                   r.status_code == 403 and code_of(r) == "publish_role", f"{r.status_code} {body_of(r)}")
 
         with checking(9):
-            r = teacher.post("/api/event", json=mort("/events/verify-no-registration/", registration={"enabled": False, "capacity": None},
+            r = teacher.post("/api/event", json=workshop_event("/events/verify-no-registration/", registration={"enabled": False, "capacity": None},
                                                     features={"microblog": True, "registration": True, "attendance": False, "gallery": False}))
             ids["noreg"] = event_of(r).get("id")
             r = status(teacher, ids["noreg"], "published")
@@ -755,7 +755,7 @@ def main():
         with checking(40):
             from model.event_backup import export_events
             path = "/events/verify-published-at/"
-            r = teacher.post("/api/event", json=mort(path))
+            r = teacher.post("/api/event", json=workshop_event(path))
             ids["pa"] = event_of(r).get("id")
             check(40, "published_at is null on a draft", r.status_code == 201 and "published_at" in event_of(r) and event_of(r)["published_at"] is None, event_of(r))
             published = event_of(status(teacher, ids["pa"], "published")).get("published_at")
@@ -891,7 +891,7 @@ def main():
         with checking(49):
             from model.event import Event
             # an event taking RSVPs, for the RSVP window (50 and 51 use it too)
-            ids["window"] = event_of(teacher.post("/api/event", json=mort("/events/verify-window/"))).get("id")
+            ids["window"] = event_of(teacher.post("/api/event", json=workshop_event("/events/verify-window/"))).get("id")
             status(teacher, ids["window"], "published")
             status(teacher, ids["window"], "registration")
             r = alice.put("/api/event/rsvp", json={"event_id": ids["window"]})
@@ -999,7 +999,7 @@ def main():
         # ---------------------------------------------------------------- the day the clocks change
         with checking(52):
             # On 2027-03-14 Los Angeles moves its clocks from 02:00 straight to 03:00
-            spring_forward = lambda name, **times: teacher.post("/api/event", json=mort(f"/events/verify-dst-{name}/", date="2027-03-14", **times))
+            spring_forward = lambda name, **times: teacher.post("/api/event", json=workshop_event(f"/events/verify-dst-{name}/", date="2027-03-14", **times))
             r = spring_forward("gap", start_time="02:30", end_time="03:00")
             check(52, "a start_time the clocks skip (02:30) is 400 no_such_time, naming the field, time, date and zone",
                   r.status_code == 400 and code_of(r) == "no_such_time" and body_of(r).get("field") == "start_time" and body_of(r).get("time") == "02:30"
@@ -1024,7 +1024,7 @@ def main():
                   (first, last) == (2000, 2100) and {k: body_of(anon.get("/api/event/options")).get("limits", {}).get(k) for k in ("first_year", "last_year")}
                   == {"first_year": 2000, "last_year": 2100}, (first, last))
             for day in ("1999-12-31", "2101-01-01", "9999-12-31"):
-                r = teacher.post("/api/event", json=mort(f"/events/verify-year-{day[:4]}/", date=day))
+                r = teacher.post("/api/event", json=workshop_event(f"/events/verify-year-{day[:4]}/", date=day))
                 check(53, f"date {day} is 400 bad_date, which names the years", r.status_code == 400 and code_of(r) == "bad_date"
                       and body_of(r).get("first_year") == 2000 and body_of(r).get("last_year") == 2100 and "between 2000 and 2100" in body_of(r).get("message", ""),
                       f"{r.status_code} {body_of(r)}")
@@ -1072,7 +1072,7 @@ def main():
             from model.event import Event, EventFile
             from model.event_backup import import_events
             check(55, "a status event_rules.json does not list counts as private", event_rules.is_private("cancelled") and not event_rules.is_private("published"))
-            ids["odd"] = event_of(teacher.post("/api/event", json=mort("/events/verify-unknown-status/"))).get("id")
+            ids["odd"] = event_of(teacher.post("/api/event", json=workshop_event("/events/verify-unknown-status/"))).get("id")
             status(teacher, ids["odd"], "published")
             db.session.execute(update(Event).where(Event.id == ids["odd"]).values({Event._status: "cancelled"}))  # as a row left by an older rules file
             db.session.commit()
@@ -1138,7 +1138,7 @@ def main():
 
         # ---------------------------------------------------------------- since and an all-day event
         with checking(57):
-            r = teacher.post("/api/event", json=mort("/events/verify-all-day/", start_time=None, end_time=None))
+            r = teacher.post("/api/event", json=workshop_event("/events/verify-all-day/", start_time=None, end_time=None))
             ids["all_day"] = event_of(r).get("id")
             status(teacher, ids["all_day"], "published")
             listed = lambda day: ids["all_day"] in [e.get("id") for e in body_of(anon.get("/api/event", query_string={"since": day})).get("events", [])]
@@ -1225,7 +1225,7 @@ def main():
                      ({"alert_days": 400}, {"field": "alert_days", "kind": "days", "limit": event_rules.limit("alert_days")}),
                      ({"location": "Room 12"}, {"field": "location", "kind": "object", "limit": None, "keys": ["name", "address", "url"]})]
             for change, want in cases:
-                body = mort("/events/verify-extras/")
+                body = workshop_event("/events/verify-extras/")
                 body.update(change)
                 r = teacher.post("/api/event", json=body)
                 extras = {key: value for key, value in body_of(r).items() if key not in ("message", "code")}

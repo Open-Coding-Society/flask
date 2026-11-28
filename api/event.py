@@ -131,7 +131,7 @@ class EventAPI:
                     'viewer': Event.caller_view(user)}
 
         @token_required(STAFF)
-        def post(self):  # Create method: a draft from Mort's keys
+        def post(self):  # Create method: a draft from the event front matter keys (pages#2089)
             ''' Read data for json body '''
             body = json_object()
 

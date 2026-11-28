@@ -7,7 +7,7 @@ participant role. api/event.py is the way in, and api/event.http walks every req
 
 Tables
   events              one row per event. The fields this service enforces are columns; the rest of the definition
-                      (Mort's front matter keys, the Markdown body included) is the _data JSON, so a draft made in
+                      (the event front matter keys from pages#2089, the Markdown body included) is the _data JSON, so a draft made in
                       the Event Builder survives a reload.
   event_participants  one row per person per event: their role in it, their RSVP and their check-in, the
                       "Participants: RSVP and attendance" part of the event. Attendance is a column here and not a
@@ -315,7 +315,7 @@ class Event(db.Model):
         found = {'id': existing.id} if existing is not None and existing.can_manage(actor) else {}
         raise EventError('page_taken', 409, page_path=page_path, **found)
 
-    # CRUD read: Mort's keys, the counts and the files. Never a person's name or uid, and never the secret.
+    # CRUD read: the event front matter keys, the counts and the files. Never a person's name or uid, and never the secret.
     # A list's read (full=False) leaves out the body and the files, and takes its counts from list_counts.
     def read(self, for_user=None, full=True, counts=None):
         data = self._data or {}
@@ -896,8 +896,8 @@ class Event(db.Model):
 
     @staticmethod
     def validate(inputs, current=None):
-        """The values to save from a create (current is None) or an update of current: the rules for each of Mort's
-        keys. Unknown keys are dropped. On an update a key that is missing stays as it is, and null clears it.
+        """The values to save from a create (current is None) or an update of current: the rules for each of the event
+        front matter keys. Unknown keys are dropped. On an update a key that is missing stays as it is, and null clears it.
         Raises EventError naming the first rule broken."""
         if 'status' in inputs:
             raise EventError('status_in_body')

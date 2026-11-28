@@ -27,7 +27,7 @@ Accept: application/json
 GET {{baseUrl}}/api/event
 Accept: application/json
 
-### 4. Create the event with Mort's front matter keys, as a draft (expect 201; 409 with the existing id if it already exists)
+### 4. Create the event with the event front matter keys (pages#2089), as a draft (expect 201; 409 with the existing id if it already exists)
 # @name createEvent
 POST {{baseUrl}}/api/event
 Content-Type: application/json

@@ -198,12 +198,12 @@ takes `"period_name": null`, meaning every period.
 #### Event system sequence
 
 Open [api/event.http](api/event.http). It walks through the Event Service top to bottom:
-authenticate as a Teacher or Admin, read the options, create a draft with Mort's front matter
-keys, publish it, set a notice, open registration and RSVP, start the event and check in with
-the code on the screen, check someone in by name, add a photo with its alt text and a YouTube
-link to the gallery, then complete and archive it, which makes it read only. Each heading says
-the status to expect. The uid and password are prompts, so nothing secret is in the file. It
-makes one event at `/events/events-demo/`, so run it once per database.
+authenticate as a Teacher or Admin, read the options, create a draft with the event front matter
+keys (pages#2089), publish it, set a notice, open registration and RSVP, start the event and
+check in with the code on the screen, check someone in by name, add a photo with its alt text
+and a YouTube link to the gallery, then complete and archive it, which makes it read only. Each
+heading says the status to expect. The uid and password are prompts, so nothing secret is in the
+file. It makes one event at `/events/events-demo/`, so run it once per database.
 
 A new database gets the event tables from `db.create_all()` (`./scripts/db_init.py` locally);
 an existing one gets them in place with `python scripts/db_upgrade.py`. Nothing is seeded:
@@ -285,7 +285,7 @@ HTTPYac is needed for that.
 | GET | `/api/event?status=a,b&since=YYYY-MM-DD` | anyone | Public events by start, without their bodies. `?mine=true` lists the events you manage, drafts included |
 | GET | `/api/event/options` | anyone | The lifecycle, the event roles, file kinds and limits from `model/dataconfigs/event_rules.json` |
 | GET | `/api/event/files?id=N` | anyone | A file of an event you can see: pdf and images inline, Word and PowerPoint as a download |
-| POST | `/api/event` | Teacher, Admin | Create a draft from Mort's front matter keys plus `page_path` |
+| POST | `/api/event` | Teacher, Admin | Create a draft from the event front matter keys (pages#2089) plus `page_path` |
 | PUT, DELETE | `/api/event` | the event's managers | Change it (`{id, ...}`), or delete a draft with no people and no files (`{id}`) |
 | PUT | `/api/event/status` | the event's managers | Move it along the lifecycle (`{id, status}`) |
 | PUT, DELETE | `/api/event/rsvp` | signed in | RSVP (going, or the waitlist when it is full) or cancel (`{event_id}`) |
