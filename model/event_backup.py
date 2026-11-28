@@ -103,8 +103,8 @@ def import_events(data):
                     res['skipped'] += 1
                     continue
                 row = EventParticipant(db.session.get(Event, event_id[item['event']]), db.session.get(User, user_id[item['uid']]))
-                row._role, row._rsvp, row._rsvp_at = item['role'], item.get('rsvp'), _dt(item.get('rsvp_at'))
-                row._checked_in_at, row._check_in_method = _dt(item.get('checked_in_at')), item.get('check_in_method')
+                row.role, row.rsvp, row.rsvp_at = item['role'], item.get('rsvp'), _dt(item.get('rsvp_at'))
+                row.checked_in_at, row.check_in_method = _dt(item.get('checked_in_at')), item.get('check_in_method')
                 db.session.add(row)
                 db.session.commit()
                 res['imported'] += 1

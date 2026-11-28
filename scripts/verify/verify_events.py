@@ -26,7 +26,7 @@ REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
 REAL_FILES = os.path.join(REPO, "instance", "data", "events")
 RULES = os.path.join(REPO, "model", "dataconfigs", "event_rules.json")
 PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run; the accounts live only in the throwaway database
-TOTAL = 46
+TOTAL = 47
 PEOPLE = {"zz_teacher": "Teacher", "zz_admin": "Admin", "zz_alice": "User", "zz_bob": "User",
           "zz_carol": "User", "zz_dave": "User", "zz_guest": "Guest"}
 FUTURE = (date.today() + timedelta(days=400)).isoformat()  # far enough ahead that RSVPs stay open whenever this runs
@@ -62,6 +62,14 @@ def files_under(folder):
 
 def b64(data):
     return base64.b64encode(data).decode()
+
+
+def sets_another_rows_column(line):
+    """Whether a line of Python assigns to another object's underscore column, like row._rsvp = ... (self._x is fine)."""
+    left, sign, right = line.partition("=")
+    if not sign or right.startswith("=") or left.rstrip()[-1:] in ("!", "<", ">"):
+        return False  # no assignment: ==, !=, <=, >=
+    return re.search(r"\b(?!self\b)\w+\._[a-z]", left) is not None
 
 
 def zip_holding(*names):
@@ -843,6 +851,17 @@ def main():
             ours = [w for w in sa_warnings if EVENT_NAMES.search(w)]
             from model.event import Event, EventFile, EventParticipant  # noqa: F401  the models are there to be checked
             check(46, "importing the models and creating the tables gives no SQLAlchemy warning about the event tables", not ours, "; ".join(ours)[:300])
+
+        # ---------------------------------------------------------------- the model's style
+        with checking(47):
+            from model.event import EventFile, EventParticipant
+            for model in (EventParticipant, EventFile):
+                missing = [c.name for c in model.__table__.columns
+                           if c.name != "id" and not isinstance(getattr(model, c.name.lstrip("_"), None), property)]
+                check(47, f"{model.__name__} has a property for every column", not missing, missing)
+            with open(os.path.join(REPO, "model", "event.py"), encoding="utf-8") as fh:
+                reaches = [line.strip() for line in fh if sets_another_rows_column(line)]
+            check(47, "Event changes another class's row only through its property setters", not reaches, reaches[:4])
 
     with app.app_context():
         db.session.remove()

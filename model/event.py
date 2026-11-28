@@ -589,7 +589,7 @@ class Event(db.Model):
         for row in waiting:
             if self._capacity is not None and going >= self._capacity:
                 break
-            row._rsvp = GOING
+            row.rsvp = GOING
             going += 1
 
     def rsvp(self, user, now=None):
@@ -612,8 +612,8 @@ class Event(db.Model):
             row = EventParticipant(self, user)
             db.session.add(row)
         going = self.participants.filter_by(_rsvp=GOING).count()
-        row._rsvp = GOING if self._capacity is None or going < self._capacity else WAITLIST
-        row._rsvp_at = now
+        row.rsvp = GOING if self._capacity is None or going < self._capacity else WAITLIST
+        row.rsvp_at = now
         db.session.commit()
         return row
 
@@ -625,7 +625,7 @@ class Event(db.Model):
         self._lock()
         row = self._participant(user)
         if row is not None and row.rsvp in (GOING, WAITLIST):
-            row._rsvp = DECLINED
+            row.rsvp = DECLINED
             db.session.flush()
             self._promote()
         db.session.commit()
@@ -668,8 +668,8 @@ class Event(db.Model):
             row = EventParticipant(self, user)
             db.session.add(row)
         if row.checked_in_at is None:
-            row._checked_in_at = now
-            row._check_in_method = BY_QR
+            row.checked_in_at = now
+            row.check_in_method = BY_QR
         db.session.commit()
         return row
 
@@ -698,13 +698,13 @@ class Event(db.Model):
             row = EventParticipant(self, person)
             db.session.add(row)
         if role is not None:
-            row._role = role
+            row.role = role
         if checked_in is True and row.checked_in_at is None:
-            row._checked_in_at = utc_now()
-            row._check_in_method = BY_ORGANIZER
+            row.checked_in_at = utc_now()
+            row.check_in_method = BY_ORGANIZER
         elif checked_in is False:
-            row._checked_in_at = None
-            row._check_in_method = None
+            row.checked_in_at = None
+            row.check_in_method = None
         db.session.commit()
         return row
 
@@ -821,7 +821,7 @@ class Event(db.Model):
     def set_file_alt(self, actor, file_id, alt):
         self.require_manager(actor)
         row = self._file(file_id)
-        row._alt = Event._alt(alt, required=row.is_photo)
+        row.alt = Event._alt(alt, required=row.is_photo)
         db.session.commit()
         return row
 
@@ -1050,24 +1050,53 @@ class EventParticipant(db.Model):
         self._role = event_rules.initial_role()  # set here, not as a column default, so no role is named in code
 
     @property
+    def event_id(self):
+        return self._event_id
+
+    @property
+    def user_id(self):
+        return self._user_id
+
+    # Event sets these as RSVPs, check-ins and roles change; the rules for them live in Event
+    @property
     def role(self):
         return self._role
+
+    @role.setter
+    def role(self, value):
+        self._role = value
 
     @property
     def rsvp(self):
         return self._rsvp
 
+    @rsvp.setter
+    def rsvp(self, value):
+        self._rsvp = value
+
     @property
     def rsvp_at(self):
         return self._rsvp_at
+
+    @rsvp_at.setter
+    def rsvp_at(self, value):
+        self._rsvp_at = value
 
     @property
     def checked_in_at(self):
         return self._checked_in_at
 
+    @checked_in_at.setter
+    def checked_in_at(self, value):
+        self._checked_in_at = value
+
     @property
     def check_in_method(self):
         return self._check_in_method
+
+    @check_in_method.setter
+    def check_in_method(self, value):
+        self._check_in_method = value
 
     def read(self):
         return {
@@ -1119,8 +1148,52 @@ class EventFile(db.Model):
         self._size = size
 
     @property
+    def event_id(self):
+        return self._event_id
+
+    @property
+    def group(self):
+        return self._group
+
+    @property
+    def kind(self):
+        return self._kind
+
+    @property
+    def name(self):
+        return self._name
+
+    @property
+    def alt(self):
+        return self._alt
+
+    @alt.setter
+    def alt(self, value):  # Event.set_file_alt checks it first
+        self._alt = value
+
+    @property
     def key(self):
         return self._key
+
+    @property
+    def link(self):
+        return self._link
+
+    @property
+    def content_type(self):
+        return self._content_type
+
+    @property
+    def size(self):
+        return self._size
+
+    @property
+    def uploader_uid(self):
+        return self._uploader_uid
+
+    @property
+    def created_at(self):
+        return self._created_at
 
     @property
     def extension(self):
