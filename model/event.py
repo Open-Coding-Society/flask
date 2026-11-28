@@ -367,6 +367,10 @@ class Event(db.Model):
         if not event_rules.open_for(action, self._status):
             raise EventError('not_open', 409, action=action, words={'action': ACTION_WORDS[action]})
 
+    def _require_before_start(self, now):
+        if now >= self._starts_at:
+            raise EventError('started', 409)  # RSVPs and cancelling close when the event starts
+
     def _takes_registration(self):
         return bool(self._registration_enabled) and self.features[REGISTRATION]
 
@@ -508,8 +512,7 @@ class Event(db.Model):
         self._require_open('rsvp')
         if not self._takes_registration():
             raise EventError('registration_off', 409)
-        if now >= self._starts_at:
-            raise EventError('started', 409)
+        self._require_before_start(now)
         self._lock()
         row = self._participant(user)
         if row is not None and row.rsvp in (GOING, WAITLIST):
@@ -523,12 +526,16 @@ class Event(db.Model):
         db.session.commit()
         return row
 
-    def cancel_rsvp(self, user):
-        """The caller is no longer coming: declined, and the first person waiting moves up. Returns the caller's RSVP
-        afterwards: declined, or None when they never signed up."""
+    def cancel_rsvp(self, user, now=None):
+        """The caller is no longer coming: declined, and the first person waiting moves up. It takes the same window
+        as an RSVP (a status open for RSVPs, before the start), so an archived event stays as it ended. Returns the
+        caller's RSVP afterwards: declined, or None when they never signed up."""
+        now = now or utc_now()
         if not self.visible_to(user):
             raise EventError('not_found', 404)
         self._lock()
+        self._require_open('rsvp')
+        self._require_before_start(now)
         row = self._participant(user)
         if row is not None and row.rsvp in (GOING, WAITLIST):
             row.rsvp = DECLINED
@@ -589,15 +596,20 @@ class Event(db.Model):
         return person
 
     def set_participant(self, actor, uid, checked_in=None, role=None):
-        """Check someone in by name (or clear it), or give them a role in the event (owner or staff only)."""
+        """Check someone in by name (or clear it), or give them a role in the event (owner or staff only). Checking in
+        by name takes the same window as the door code; a role, or adding someone to the roster, is an edit."""
         self.require_manager(actor)
+        if checked_in is not None and not isinstance(checked_in, bool):
+            raise EventError('bad_flag', field='checked_in')
+        if checked_in is not None:
+            self._require_check_in()
+        if role is not None or checked_in is None:
+            self._require_open('edit')
         if role is not None:
             if not self._may_change_roles(actor):
                 raise EventError('not_owner', 403)
             if role not in event_rules.participant_roles():
                 raise EventError('bad_role', roles=list(event_rules.participant_roles()))
-        if checked_in is not None and not isinstance(checked_in, bool):
-            raise EventError('bad_flag', field='checked_in')
         person = Event._person(uid)
         row = self._participant(person)
         if row is None:
@@ -617,6 +629,7 @@ class Event(db.Model):
     def remove_participant(self, actor, uid):
         """Take someone out of the event, and move the waitlist up. Removing an organizer is the owner's or staff's."""
         self.require_manager(actor)
+        self._require_open('edit')
         row = self._participant(Event._person(uid))
         if row is None:
             return None
@@ -719,13 +732,15 @@ class Event(db.Model):
 
     def set_file_alt(self, actor, file_id, alt):
         self.require_manager(actor)
+        self._require_open('files')
         row = self._file(file_id)
         row.alt = Event._alt(alt, required=row.is_photo)
         db.session.commit()
         return row
 
     def remove_file(self, actor, file_id):
-        """Delete the row and the stored file. If the store does not answer, nothing changes (the API rolls back)."""
+        """Delete the row and the stored file. This is allowed in every status, archived too, so a manager can always
+        take a bad photo down. If the store does not answer, nothing changes (the API rolls back)."""
         self.require_manager(actor)
         row = self._file(file_id)
         db.session.delete(row)

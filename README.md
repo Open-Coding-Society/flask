@@ -295,6 +295,10 @@ HTTPYac is needed for that.
 | POST, PUT, DELETE | `/api/event/files` | the event's managers | Add a file (`{event_id, group, kind, name, content, alt}`) or a video link (`{..., link}`), change a photo's alt text (`{id, alt}`), remove one (`{id}`) |
 | GET, POST | `/api/export/events`, `/api/export/import/events` | Admin | The events bundle a migration copies |
 
+An archived event is read only: no edits, roles, RSVPs or cancelling, check-ins or new alt text.
+Removing a file is the one change allowed in every status, so a manager can always take a bad photo
+down. What each status allows is `open_for` in `event_rules.json`.
+
 An event's managers are staff, the account that made it, and its participants with a role in
 `manager_roles` (organizer). Every error answer is `{"message", "code"}`, with `code` a key of
 `MESSAGES` in `model/event.py`, so a page can word it. The lifecycle, the event roles and every

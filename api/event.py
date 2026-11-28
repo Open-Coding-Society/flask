@@ -17,6 +17,11 @@ The lifecycle as event_rules.json ships it:
     completed     everyone         edit, files                archived
     archived      everyone         nothing: it is read only   (nothing)
 
+"Allows" is open_for in event_rules.json, and the model checks it on every change: edits and roles (edit), RSVPs
+and cancelling them, until the event starts (rsvp), the door code and checking someone in by name (check_in), and
+adding files or changing their alt text (files). Removing a file is allowed in every status, so a manager can
+always take a bad photo down.
+
 An event's managers are staff, its owner, and its participants with a role in manager_roles (organizer).
 Leaving draft the first time is publishing, which needs a role in publish_roles (the staff roles).
 

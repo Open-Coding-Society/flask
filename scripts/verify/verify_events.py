@@ -26,7 +26,7 @@ REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
 REAL_FILES = os.path.join(REPO, "instance", "data", "events")
 RULES = os.path.join(REPO, "model", "dataconfigs", "event_rules.json")
 PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run; the accounts live only in the throwaway database
-TOTAL = 48
+TOTAL = 49
 PEOPLE = {"zz_teacher": "Teacher", "zz_admin": "Admin", "zz_alice": "User", "zz_bob": "User",
           "zz_carol": "User", "zz_dave": "User", "zz_guest": "Guest"}
 FUTURE = (date.today() + timedelta(days=400)).isoformat()  # far enough ahead that RSVPs stay open whenever this runs
@@ -769,11 +769,13 @@ def main():
                   isinstance(in_bundle, str) and isinstance(published, str) and in_bundle[:23] == published[:23], f"{in_bundle} {published}")
 
         with checking(41):
-            r = teacher.put("/api/event/files", json={"id": ids["png"], "alt": "Students pair-programming at laptops"})
+            # a photo of the published event: e1's are read only now that it is archived (check 49)
+            ids["pa_png"] = (body_of(upload(teacher, ids["pa"], "gallery", "students.png", PNG, alt="Students at laptops")).get("file") or {}).get("id")
+            r = teacher.put("/api/event/files", json={"id": ids["pa_png"], "alt": "Students pair-programming at laptops"})
             check(41, "a manager sets a photo's alt text (200)", r.status_code == 200 and (body_of(r).get("file") or {}).get("alt") == "Students pair-programming at laptops", body_of(r))
-            r = alice.put("/api/event/files", json={"id": ids["png"], "alt": "Changed by alice"})
+            r = alice.put("/api/event/files", json={"id": ids["pa_png"], "alt": "Changed by alice"})
             check(41, "it is 403 for alice", r.status_code == 403 and code_of(r) == "not_manager", f"{r.status_code} {body_of(r)}")
-            r = teacher.put("/api/event/files", json={"id": ids["png"], "alt": ""})
+            r = teacher.put("/api/event/files", json={"id": ids["pa_png"], "alt": ""})
             check(41, "an empty alt is 400", r.status_code == 400 and code_of(r) == "bad_alt", f"{r.status_code} {body_of(r)}")
 
         with checking(42):
@@ -884,6 +886,39 @@ def main():
             with open(os.path.join(REPO, "model", "event.py"), encoding="utf-8") as fh:
                 reaches = [line.strip() for line in fh if sets_another_rows_column(line)]
             check(47, "Event changes another class's row only through its property setters", not reaches, reaches[:4])
+
+        # ---------------------------------------------------------------- archived is read only
+        with checking(49):
+            from model.event import Event
+            # an event taking RSVPs, for the RSVP window (50 and 51 use it too)
+            ids["window"] = event_of(teacher.post("/api/event", json=mort("/events/verify-window/"))).get("id")
+            status(teacher, ids["window"], "published")
+            status(teacher, ids["window"], "registration")
+            r = alice.put("/api/event/rsvp", json={"event_id": ids["window"]})
+            check(49, "alice RSVPs to an event taking RSVPs", r.status_code == 200 and body_of(r).get("rsvp") == "going", f"{r.status_code} {body_of(r)}")
+            window = db.session.get(Event, ids["window"])
+            answer = model_error(lambda: window.cancel_rsvp(person("zz_alice"), now=window.starts_at + timedelta(minutes=1)))
+            db.session.rollback()
+            check(49, "cancelling once the event has started is 409 (started), the same window as an RSVP",
+                  answer is not None and answer[0].get("code") == "started" and answer[1] == 409, answer)
+
+            participants = lambda send, **fields: send("/api/event/participants", json={"event_id": ids["e1"], **fields})
+            refusals = [
+                ("bob cancels his RSVP", "rsvp", lambda: bob.delete("/api/event/rsvp", json={"event_id": ids["e1"]})),
+                ("the teacher makes bob an organizer", "edit", lambda: participants(teacher.put, uid="zz_bob", role="organizer")),
+                ("the teacher removes bob", "edit", lambda: participants(teacher.delete, uid="zz_bob")),
+                ("the teacher checks bob in by name", "check_in", lambda: participants(teacher.put, uid="zz_bob", checked_in=True)),
+                ("the teacher clears dave's check-in", "check_in", lambda: participants(teacher.put, uid="zz_dave", checked_in=False)),
+                ("the teacher changes a photo's alt text", "files", lambda: teacher.put("/api/event/files", json={"id": ids["png"], "alt": "Changed after archiving"})),
+            ]
+            for label, action, send in refusals:
+                r = send()
+                check(49, f"on the archived event, {label} is 409 (not_open, action {action})",
+                      r.status_code == 409 and code_of(r) == "not_open" and body_of(r).get("action") == action, f"{r.status_code} {body_of(r)}")
+            r = teacher.delete("/api/event/files", json={"id": ids["png"]})
+            check(49, "while a manager can still take a photo down (204)", r.status_code == 204, f"{r.status_code} {body_of(r)}")
+            r = anon.get("/api/event/files", buffered=True, query_string={"id": ids["png"]})
+            check(49, "and it is gone", r.status_code == 404, r.status_code)
 
         # ---------------------------------------------------------------- error extras: last, so it reads every answer
         with checking(48):
