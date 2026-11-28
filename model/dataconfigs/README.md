@@ -83,7 +83,7 @@ asks `model/event_rules.py`, so a kit changes the lifecycle or adds a role (say 
 | `video_hosts` | The hosts a hosted video link in the gallery may point at. |
 | `check_in_code_seconds` | How long one check-in code lasts (30 to 3600). The code before it is still accepted. |
 | `s3_prefix` | Where event files go in the S3 bucket, when S3 is set up. |
-| `limits` | The most characters (`text`, `description`, `body`), items (`list`) and days (`alert_days`) a field of an event's definition may have. |
+| `limits` | The most characters (`text`, `description`, `body`), items (`list`) and days (`alert_days`) a field of an event's definition may have, and the first and last year (`first_year`, `last_year`: 2000 and 2100) an event's date and a list's `since` may be in. The years must run from 1 to 9998, `first_year` no later than `last_year`. |
 
 **Files up to 10 MB each.** `max_bytes` is 10,000,000 for both kinds. A file is sent as base64, about 4/3 of its
 size, so `POST /api/event/files` alone reads bodies up to the largest `max_bytes` × 4/3 + 64 KB; every other route

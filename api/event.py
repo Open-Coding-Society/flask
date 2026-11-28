@@ -32,10 +32,14 @@ Who may make each request (model/dataconfigs/permissions.json says the same):
     staff      POST /api/event (Teacher and Admin, the staff_roles in account_types.json)
     signed in  every other request; whether the caller manages the event is checked in the model
 
-Ids go in the body or the query, never the path. The person acting is always the login, never a uid in the
-body. Every error is {"message": ..., "code": ...}, with code a key of MESSAGES in model/event.py, except the
-two Flask gives itself: a body that is not a JSON object (400) and a body over the size limit (413). A file
-store that does not answer is a 503 with Retry-After. Only POST /api/event/files takes bodies over 5 MB.
+Ids go in the body or the query, never the path, and an id over the database's integer limit is not_found.
+The person acting is always the login, never a uid in the body. Every error is {"message": ..., "code": ...},
+with code a key of MESSAGES in model/event.py, except the two Flask gives itself: a body that is not a JSON
+object (400) and a body over the size limit (413). Any other field of an error is an id or a number (not_open's
+action is the open_for key, bad_field's kind and limit, too_big's max_bytes), so a page words it; the English is
+only in message. A file store that does not answer is a 503 with Retry-After when a file is added or opened;
+removing a file still answers 204, and the bytes left behind are logged. Only POST /api/event/files takes bodies
+over 5 MB.
 
 Requests and expected results: api/event.http.
 """

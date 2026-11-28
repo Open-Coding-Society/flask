@@ -3,7 +3,7 @@
 # checking the expected status in its heading. The uid and password are prompts; never
 # write them into this file. Creates real rows in the selected environment: one event at
 # @pagePath, your RSVP and check-in, a photo and a video link. Run it once per database:
-# the event ends archived, which is read only.
+# the event ends archived, which is read only (removing a file is the one change left).
 @pagePath = /events/events-demo/
 
 ### 1. Authenticate as a Teacher or Admin (expect 200)
@@ -19,7 +19,7 @@ Accept: application/json
   "password": "{{password}}"
 }
 
-### 2. The options a page checks an event with: statuses and moves, roles, file kinds, limits (expect 200)
+### 2. The options a page checks an event with: statuses and moves, roles, file kinds, limits with first_year and last_year (expect 200)
 GET {{baseUrl}}/api/event/options
 Accept: application/json
 
@@ -49,6 +49,20 @@ Accept: application/json
   "attachments": [{"type": "gallery", "id": "workshop-gallery"}, {"type": "document", "id": "workshop-agenda"}],
   "features": {"microblog": true, "registration": true, "attendance": true, "gallery": true},
   "body": "## Agenda\n\nBring a laptop."
+}
+
+### 4b. A start time the clocks skip, 02:30 on 2027-03-14 in Los Angeles: refused, and nothing is made (expect 400, code "no_such_time", field "start_time")
+POST {{baseUrl}}/api/event
+Content-Type: application/json
+Accept: application/json
+
+{
+  "page_path": "/events/events-demo-clock-change/",
+  "title": "Clock change (demo)",
+  "date": "2027-03-14",
+  "start_time": "02:30",
+  "end_time": "04:00",
+  "timezone": "America/Los_Angeles"
 }
 
 ### 5. Read it by its page: a draft, which only its managers see, and it can move only to published (expect 200, viewer.next_statuses ["published"])
@@ -123,7 +137,7 @@ Accept: application/json
   "event_id": {{event.response.body.$.event.id}}
 }
 
-### 13. The check-in code before the event is active: refused (expect 409, code "not_open")
+### 13. The check-in code before the event is active: refused (expect 409, code "not_open", action "check_in")
 GET {{baseUrl}}/api/event/checkin?event_id={{event.response.body.$.event.id}}
 Accept: application/json
 
@@ -206,6 +220,20 @@ Accept: application/json
 }
 
 ### 23. Add a YouTube link to the gallery; only the link is kept (expect 201, with link and no url)
+# @name video
+POST {{baseUrl}}/api/event/files
+Content-Type: application/json
+Accept: application/json
+
+{
+  "event_id": {{event.response.body.$.event.id}},
+  "group": "workshop-gallery",
+  "kind": "gallery",
+  "name": "Workshop recording",
+  "link": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+}
+
+### 23b. The same link again in the same group: refused (expect 409, code "link_taken")
 POST {{baseUrl}}/api/event/files
 Content-Type: application/json
 Accept: application/json
@@ -238,7 +266,7 @@ Accept: application/json
   "status": "archived"
 }
 
-### 25. Change an archived event: refused, it is read only (expect 409, code "not_open")
+### 25. Change an archived event: refused, it is read only (expect 409, code "not_open", action "edit")
 PUT {{baseUrl}}/api/event
 Content-Type: application/json
 Accept: application/json
@@ -246,6 +274,15 @@ Accept: application/json
 {
   "id": {{event.response.body.$.event.id}},
   "title": "Changed after the event"
+}
+
+### 25b. Remove the video link from the archived event: a manager can always take a file down (expect 204)
+DELETE {{baseUrl}}/api/event/files
+Content-Type: application/json
+Accept: application/json
+
+{
+  "id": {{video.response.body.$.file.id}}
 }
 
 ### 26. The events bundle a migration copies (expect 200 as an Admin; 403 for a Teacher)

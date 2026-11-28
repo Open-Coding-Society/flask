@@ -3,7 +3,8 @@
 An event is the parent object of the Events system (pages#2089): its page, its lifecycle, who may manage it,
 who signed up and who came, and its files. Each rule lives here once. The lifecycle, the event's own roles and
 every size come from dataconfigs/event_rules.json (model/event_rules.py), so the code never names a status or a
-participant role. api/event.py is the way in, and api/event.http walks every request.
+participant role. What each field of the definition must be, and what a file must start with, is in
+model/event_fields.py. api/event.py is the way in, and api/event.http walks every request.
 
 Tables
   events              one row per event. The fields this service enforces are columns; the rest of the definition

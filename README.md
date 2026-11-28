@@ -201,9 +201,11 @@ Open [api/event.http](api/event.http). It walks through the Event Service top to
 authenticate as a Teacher or Admin, read the options, create a draft with the event front matter
 keys (pages#2089), publish it, set a notice, open registration and RSVP, start the event and
 check in with the code on the screen, check someone in by name, add a photo with its alt text
-and a YouTube link to the gallery, then complete and archive it, which makes it read only. Each
-heading says the status to expect. The uid and password are prompts, so nothing secret is in the
-file. It makes one event at `/events/events-demo/`, so run it once per database.
+and a YouTube link to the gallery, then complete and archive it, which makes it read only except
+for taking a file down. A few steps show refusals and their codes, such as a time the clocks
+skip (`no_such_time`) and the same video link twice (`link_taken`). Each heading says the status
+to expect. The uid and password are prompts, so nothing secret is in the file. It makes one
+event at `/events/events-demo/`, so run it once per database.
 
 A new database gets the event tables from `db.create_all()` (`./scripts/db_init.py` locally);
 an existing one gets them in place with `python scripts/db_upgrade.py`. Nothing is seeded:
@@ -301,8 +303,18 @@ down. What each status allows is `open_for` in `event_rules.json`.
 
 An event's managers are staff, the account that made it, and its participants with a role in
 `manager_roles` (organizer). Every error answer is `{"message", "code"}`, with `code` a key of
-`MESSAGES` in `model/event.py`, so a page can word it. The lifecycle, the event roles and every
-size are data in `model/dataconfigs/event_rules.json` (see its README).
+`MESSAGES` in `model/event.py`, so a page can word it. Any other field of an error is an id or a
+number, never English: `not_open`'s `action` is the `open_for` key (`rsvp`), `bad_field` sends
+`kind` and `limit`, `too_big` sends `max_bytes`, and `page_taken` sends the other event's `id`
+only to someone who can manage it. The lifecycle, the event roles and every size are data in
+`model/dataconfigs/event_rules.json` (see its README).
+
+**Dates and times.** An event's date must fall between `first_year` and `last_year` in
+`event_rules.json` (2000 to 2100), or it is `bad_date`. A start or end time the clocks skip, like
+02:30 on the day daylight time starts, is `no_such_time`, and an end is compared with the start as
+an instant, not on the clock. Ids and `registration.capacity` stay within the database's integer
+(2,147,483,647): a larger id is `not_found` and a larger capacity `bad_capacity`. The same video
+link twice in one gallery group is `link_taken`.
 
 ```mermaid
 erDiagram
@@ -355,7 +367,8 @@ must start like a PNG); svg and html are never accepted. A gallery photo needs a
 gallery also takes YouTube and Google Drive links, which store nothing but the link. Files are kept
 in `instance/data/events` (not `instance/uploads`, which `/uploads/<path>` serves by path alone), or in S3
 when `AWS_BUCKET_NAME`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set; S3 not answering is
-a 503 with `Retry-After`. The 10 MB is `max_bytes` in `event_rules.json`. It needs Flask 3.1 or
+a 503 with `Retry-After` when a file is added or opened, while removing one still answers 204 and logs
+the bytes it left behind. The 10 MB is `max_bytes` in `event_rules.json`. It needs Flask 3.1 or
 newer (only the upload route raises its body limit; every other route keeps 5 MB) and the nginx
 `location /api/event/files` block in `nginx_flask_8587.conf` (`client_max_body_size 14m`). The
 three change together.
