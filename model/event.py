@@ -8,8 +8,8 @@ model/event_fields.py. api/event.py is the way in, and api/event.http walks ever
 
 Tables
   events              one row per event. The fields this service enforces are columns; the rest of the definition
-                      (the event front matter keys from pages#2089, the Markdown body included) is the _data JSON, so a draft made in
-                      the Event Builder survives a reload.
+                      (the event front matter keys from pages#2089, the Markdown body included) is the _data JSON,
+                      so a draft made in the Event Builder survives a reload.
   event_participants  one row per person per event: their role in it, their RSVP and their check-in, the
                       "Participants: RSVP and attendance" part of the event. Attendance is a column here and not a
                       Presence event: a presence event toggles enter and exit per room, so a second scan of the door
@@ -131,7 +131,8 @@ def _length(model, column):
 
 
 def _bad_field(error):
-    """The bad_field answer for a field event_fields refused: its ids and numbers travel, its words fill in the message."""
+    """The bad_field answer for a field event_fields refused: its ids and numbers travel, its words fill in the
+    message."""
     return EventError('bad_field', words=error.words, **error.fields)
 
 
@@ -316,8 +317,8 @@ class Event(db.Model):
         found = {'id': existing.id} if existing is not None and existing.can_manage(actor) else {}
         raise EventError('page_taken', 409, page_path=page_path, **found)
 
-    # CRUD read: the event front matter keys, the counts and the files. Never a person's name or uid, and never the secret.
-    # A list's read (full=False) leaves out the body and the files, and takes its counts from list_counts.
+    # CRUD read: the event front matter keys, the counts and the files. Never a person's name or uid, and never the
+    # secret. A list's read (full=False) leaves out the body and the files, and takes its counts from list_counts.
     def read(self, for_user=None, full=True, counts=None):
         data = self._data or {}
         event = {
