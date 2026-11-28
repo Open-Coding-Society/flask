@@ -23,7 +23,6 @@ import hmac
 import re
 import secrets
 from datetime import datetime, time, timedelta, timezone
-from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -701,20 +700,13 @@ class Event(db.Model):
             raise EventError('bad_content')
 
     def _add_video(self, actor, group, kind, name, link):
-        bad = EventError('bad_video', hosts=list(event_rules.video_hosts()))
-        if kind != GALLERY or not isinstance(link, str) or len(link) > _length(EventFile, '_link') or not re.fullmatch(r"\S+", link):
-            raise bad
-        try:
-            parts = urlsplit(link)
-            port = parts.port
-        except ValueError:
-            raise bad
-        if parts.scheme != "https" or port is not None or not event_rules.is_video_host(parts.hostname):
-            raise bad
+        saved = event_fields.video_link(link, _length(EventFile, '_link')) if kind == GALLERY else None
+        if saved is None:
+            raise EventError('bad_video', hosts=list(event_rules.video_hosts()))
         title = name.strip() if isinstance(name, str) else ""
         if not title or len(title) > event_rules.limit('text'):
             raise _bad_field(event_fields.FieldError('name', 'name', event_rules.limit('text')))
-        row = EventFile(self, group=group, kind=kind, name=title, uploader_uid=actor.uid, link=link)
+        row = EventFile(self, group=group, kind=kind, name=title, uploader_uid=actor.uid, link=saved)
         db.session.add(row)
         db.session.commit()
         return row

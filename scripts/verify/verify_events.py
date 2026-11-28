@@ -786,6 +786,28 @@ def main():
                                       ("a link in the document kind", "document", youtube)):
                 r = upload(teacher, ids["co"], kind, "Recording", link=link)
                 check(42, f"{label} is 400", r.status_code == 400 and code_of(r) == "bad_video", f"{r.status_code} {body_of(r)}")
+            # urlsplit and a browser must read the same host: a browser reads \ as /, and user@ hides the real host
+            for label, link in (("a backslash before @ (a browser goes to evil.test)", "https://evil.test\\@www.youtube.com/watch?v=x"),
+                                ("a user name before the host", "https://someone@www.youtube.com/watch?v=x"),
+                                ("a user name and password before the host", "https://a:b@www.youtube.com/watch?v=x"),
+                                ("a double quote", 'https://www.youtube.com/watch?v="x"'),
+                                ("a single quote", "https://www.youtube.com/watch?v=x'y"),
+                                ("< and >", "https://www.youtube.com/watch?v=<x>"),
+                                ("a control character", "https://www.youtube.com/watch?v=x\x01"),
+                                ("a % that is not %XX", "https://www.youtube.com/watch?v=%zz")):
+                r = upload(teacher, ids["co"], "gallery", "Recording", link=link)
+                check(42, f"a video link with {label} is 400", r.status_code == 400 and code_of(r) == "bad_video", f"{r.status_code} {body_of(r)}")
+            r = upload(teacher, ids["co"], "gallery", "Second recording", link="HTTPS://www.youtube.com/watch?v=abc123")
+            check(42, "a link is saved as urlsplit reads it, not as sent (https in lower case)",
+                  r.status_code == 201 and (body_of(r).get("file") or {}).get("link") == "https://www.youtube.com/watch?v=abc123", f"{r.status_code} {body_of(r)}")
+            for label, change in (("a site path with a backslash", {"presentation": "/slides\\evil.test"}),
+                                  ("a site path with < and >", {"presentation": "/talks/<script>"}),
+                                  ("an https link with a double quote", {"image_credit": {"name": "A", "url": 'https://example.com/a"b'}}),
+                                  ("an https link with a space", {"location": {"name": "Room", "url": "https://example.com/a b"}})):
+                r = teacher.put("/api/event", json={"id": ids["co"], **change})
+                check(42, f"a definition link, {label}, is 400", r.status_code == 400 and code_of(r) == "bad_field", f"{r.status_code} {code_of(r)}")
+            r = teacher.put("/api/event", json={"id": ids["co"], "presentation": "/talks/intro%20slides/"})
+            check(42, "a site path with %XX is fine", r.status_code == 200 and event_of(r).get("presentation") == "/talks/intro%20slides/", f"{r.status_code} {body_of(r)}")
             r = upload(teacher, ids["co"], "gallery", "both.png", PNG, alt="Both", link=youtube)
             check(42, "content and link together is 400", r.status_code == 400 and code_of(r) == "bad_item", f"{r.status_code} {body_of(r)}")
             r = teacher.get("/api/event/files", buffered=True, query_string={"id": video.get("id")})

@@ -6,6 +6,7 @@ values themselves, so they can be read in one place:
   DEFINITION_FIELDS  the event front matter keys (pages#2089) the service keeps in _data, each with its kind
   clean()            one field's value as it is saved, or FieldError
   DATE, CLOCK, ...   the patterns a date, a time, a link and an attachment group must match
+  video_link()       a gallery video link as it is saved, or None when it is not one
   SIGNATURES         what a file of each extension starts with, so its contents must match its name
 
 A FieldError carries ids and numbers, not English, so model/event.py answers it as bad_field and a page words it.
@@ -13,6 +14,7 @@ A FieldError carries ids and numbers, not English, so model/event.py answers it 
 import io
 import re
 import zipfile
+from urllib.parse import urlsplit, urlunsplit
 
 from model import event_rules
 
@@ -47,7 +49,12 @@ DEFINITION_FIELDS = {
 
 DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")  # [0-9], not \d, which takes other scripts' digits too
 CLOCK = re.compile(r"[0-9]{2}:[0-9]{2}")
-SITE_PATH_OR_HTTPS = re.compile(r"/(?![/\\])\S*|https://\S+", re.IGNORECASE)  # never //host or /\host, which leave the site
+# One character of a URL as RFC 3986 writes it (unreserved, reserved, or %XX), less the single quote. That leaves out
+# spaces, quotes, < >, \ and control characters: a browser reads \ as /, so https://evil.test\@www.youtube.com goes
+# to evil.test while urlsplit reads youtube, and a quote or < could close the HTML attribute a page puts the link in.
+URL_CHARACTER = r"(?:[A-Za-z0-9\-._~:/?#\[\]@!$&()*+,;=]|%[0-9A-Fa-f]{2})"
+URL = re.compile(URL_CHARACTER + "+")
+SITE_PATH_OR_HTTPS = re.compile(rf"/(?!/){URL_CHARACTER}*|https://{URL_CHARACTER}+", re.IGNORECASE)  # never //host, which leaves the site
 GROUP = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
 
@@ -122,6 +129,22 @@ def clean(field, kind, value):
             raise bad
         return [clean(field, limit, item) for item in value]
     raise ValueError(f"DEFINITION_FIELDS: {field} has a kind that is not for a definition field: {name}")
+
+
+def video_link(link, longest):
+    """A gallery video link as it is saved (urlunsplit's form of it), or None when it is not an https link to one of
+    video_hosts. The host urlsplit reads must be the host a browser goes to, so the link has only URL characters,
+    no user name or password before an @ (https://www.youtube.com@evil.test goes to evil.test), and no port."""
+    if not isinstance(link, str) or len(link) > longest or not URL.fullmatch(link):
+        return None
+    try:
+        parts = urlsplit(link)
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme != "https" or port is not None or parts.username or parts.password or "@" in parts.netloc:
+        return None
+    return urlunsplit(parts) if event_rules.is_video_host(parts.hostname) else None
 
 
 # What a file of each extension starts with, so a file's contents must match its name. svg and html have no entry,
