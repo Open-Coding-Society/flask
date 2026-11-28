@@ -350,9 +350,9 @@ def main():
             r = upload(teacher, ids["e1"], "document", "agenda.pdf", PDF, group="workshop-agenda")
             ids["pdf"] = (body_of(r).get("file") or {}).get("id")
             check(6, "the teacher adds a PDF to the draft (201)", r.status_code == 201 and ids["pdf"], f"{r.status_code} {body_of(r)}")
-            r = anon.get("/api/event/files", query_string={"id": ids["pdf"]})
+            r = anon.get("/api/event/files", buffered=True, query_string={"id": ids["pdf"]})
             check(6, "the draft's file is 404 for an anonymous caller", ids["pdf"] and r.status_code == 404 and code_of(r) == "not_found", f"{r.status_code} {body_of(r)}")
-            r = teacher.get("/api/event/files", query_string={"id": ids["pdf"]})
+            r = teacher.get("/api/event/files", buffered=True, query_string={"id": ids["pdf"]})
             check(6, "and the teacher can open it", r.status_code == 200 and r.data.startswith(b"%PDF-"), r.status_code)
 
         with checking(7):
@@ -549,7 +549,7 @@ def main():
             files = event_of(anon.get("/api/event", query_string={"id": ids["e1"]})).get("files", [])
             check(25, "the public read shows the photo with its alt text",
                   any(f.get("id") == ids["png"] and f.get("alt") == "Students working at laptops" and f.get("url") == f"/api/event/files?id={ids['png']}" for f in files), files)
-            r = anon.get("/api/event/files", query_string={"id": ids["png"]})
+            r = anon.get("/api/event/files", buffered=True, query_string={"id": ids["png"]})
             check(25, "an anonymous GET gives image/png, inline, with nosniff",
                   r.status_code == 200 and r.mimetype == "image/png" and r.headers.get("Content-Disposition", "").startswith("inline")
                   and r.headers.get("X-Content-Type-Options") == "nosniff" and r.data == PNG, f"{r.status_code} {dict(r.headers)}")
@@ -577,10 +577,10 @@ def main():
             r = upload(teacher, ids["e1"], "document", "handout.docx", DOCX, group="workshop-agenda")
             ids["docx"] = (body_of(r).get("file") or {}).get("id")
             check(27, "a Word document is 201", r.status_code == 201 and ids["docx"], f"{r.status_code} {body_of(r)}")
-            r = anon.get("/api/event/files", query_string={"id": ids["docx"]})
+            r = anon.get("/api/event/files", buffered=True, query_string={"id": ids["docx"]})
             disposition = r.headers.get("Content-Disposition", "")
             check(27, "the docx downloads as an attachment with its name", r.status_code == 200 and disposition.startswith("attachment") and "handout.docx" in disposition, disposition)
-            r = anon.get("/api/event/files", query_string={"id": ids["pdf"]})
+            r = anon.get("/api/event/files", buffered=True, query_string={"id": ids["pdf"]})
             check(27, "the pdf opens inline", r.status_code == 200 and r.mimetype == "application/pdf" and r.headers.get("Content-Disposition", "").startswith("inline"), dict(r.headers))
             r = upload(teacher, ids["e1"], "document", "Повестка дня.PDF", PDF, group="workshop-agenda")
             check(27, "a file name in another alphabet keeps its type: a safe name ending in .pdf",
@@ -591,7 +591,7 @@ def main():
             check(28, "alice deleting a file is 403", r.status_code == 403 and code_of(r) == "not_manager", f"{r.status_code} {body_of(r)}")
             r = teacher.delete("/api/event/files", json={"id": ids["docx"]})
             check(28, "the teacher deletes it (204)", r.status_code == 204, r.status_code)
-            r = anon.get("/api/event/files", query_string={"id": ids["docx"]})
+            r = anon.get("/api/event/files", buffered=True, query_string={"id": ids["docx"]})
             check(28, "and the file is then 404", r.status_code == 404 and code_of(r) == "not_found", f"{r.status_code} {body_of(r)}")
 
         with checking(29):
@@ -605,7 +605,7 @@ def main():
                 key = fake.puts[-1]["Key"] if fake.puts else ""
                 check(29, "with S3 the upload is 201 and its key starts with flask/events/<id>/",
                       r.status_code == 201 and key.startswith(f"flask/events/{ids['e1']}/") and fake.puts[-1].get("Body") == PNG, f"{r.status_code} {key}")
-                r = anon.get("/api/event/files", query_string={"id": ids["s3"]})
+                r = anon.get("/api/event/files", buffered=True, query_string={"id": ids["s3"]})
                 params = fake.presigned[-1]["params"] if fake.presigned else {}
                 check(29, "a GET is a 302 to the presigned URL, for 5 minutes, inline as image/png",
                       r.status_code == 302 and r.headers.get("Location") == FakeS3.URL and fake.presigned[-1]["expires"] == 300
@@ -667,7 +667,8 @@ def main():
             bundle = json.loads(json.dumps(export_events()))  # through JSON, as the export route sends it
             before = event_counts()
             db.session.remove()
-            db.engines[None] = create_engine(f"sqlite:///{os.path.join(work, 'restored.db')}")
+            restored_engine = create_engine(f"sqlite:///{os.path.join(work, 'restored.db')}")
+            db.engines[None] = restored_engine
             try:
                 db.create_all()
                 for uid, role in PEOPLE.items():
@@ -680,6 +681,7 @@ def main():
             finally:
                 db.session.remove()
                 db.engines[None] = first_engine
+                restored_engine.dispose()
 
         with checking(35):
             from model.event import EventParticipant
@@ -778,7 +780,7 @@ def main():
                 check(42, f"{label} is 400", r.status_code == 400 and code_of(r) == "bad_video", f"{r.status_code} {body_of(r)}")
             r = upload(teacher, ids["co"], "gallery", "both.png", PNG, alt="Both", link=youtube)
             check(42, "content and link together is 400", r.status_code == 400 and code_of(r) == "bad_item", f"{r.status_code} {body_of(r)}")
-            r = teacher.get("/api/event/files", query_string={"id": video.get("id")})
+            r = teacher.get("/api/event/files", buffered=True, query_string={"id": video.get("id")})
             check(42, "GET files of the video is 404: nothing is stored", r.status_code == 404 and code_of(r) == "not_found", f"{r.status_code} {body_of(r)}")
 
         with checking(43):
@@ -841,6 +843,10 @@ def main():
             ours = [w for w in sa_warnings if EVENT_NAMES.search(w)]
             from model.event import Event, EventFile, EventParticipant  # noqa: F401  the models are there to be checked
             check(46, "importing the models and creating the tables gives no SQLAlchemy warning about the event tables", not ours, "; ".join(ours)[:300])
+
+    with app.app_context():
+        db.session.remove()
+    first_engine.dispose()  # close the throwaway database, so -W default shows no unclosed connection
 
     with checking(38):
         real_after = sha256(REAL_DB) if os.path.exists(REAL_DB) else None
