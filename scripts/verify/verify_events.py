@@ -26,7 +26,7 @@ REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
 REAL_FILES = os.path.join(REPO, "instance", "data", "events")
 RULES = os.path.join(REPO, "model", "dataconfigs", "event_rules.json")
 PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run; the accounts live only in the throwaway database
-TOTAL = 58
+TOTAL = 59
 PEOPLE = {"zz_teacher": "Teacher", "zz_admin": "Admin", "zz_alice": "User", "zz_bob": "User",
           "zz_carol": "User", "zz_dave": "User", "zz_guest": "Guest"}
 FUTURE = (date.today() + timedelta(days=400)).isoformat()  # far enough ahead that RSVPs stay open whenever this runs
@@ -1157,6 +1157,25 @@ def main():
                 check(58, f"and Event.{name}(the teacher) answers", model_error(lambda: getattr(window, name)(person("zz_teacher"))) is None)
             with open(os.path.join(REPO, "api", "event.py"), encoding="utf-8") as fh:
                 check(58, "api/event.py leaves every manager check to the model", "require_manager" not in fh.read())
+
+        # ---------------------------------------------------------------- names the code switches on
+        with checking(59):
+            from model import event_rules
+
+            def refusal(change):
+                broken = copy.deepcopy(rules)
+                change(broken)
+                try:
+                    event_rules._check(broken)
+                except ValueError as error:
+                    return str(error)
+                return ""
+            for feature in ("registration", "attendance", "gallery"):
+                message = refusal(lambda d: d["features"].remove(feature))
+                check(59, f"event_rules.json without the {feature} feature is refused at startup, naming features and {feature}",
+                      message.startswith("event_rules.json: features") and feature in message, message or "accepted")
+            message = refusal(lambda d: d["file_kinds"].pop("gallery"))
+            check(59, "and without the gallery file kind, naming file_kinds", message.startswith("event_rules.json: file_kinds") and "gallery" in message, message or "accepted")
 
         # ---------------------------------------------------------------- error extras: last, so it reads every answer
         with checking(48):

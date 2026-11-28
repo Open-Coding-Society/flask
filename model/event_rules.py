@@ -12,8 +12,10 @@
                          account_types.json.
   participant_roles      the roles a person can have in one event. The first is the one a new participant gets.
   manager_roles          the participant roles that may manage the event, besides its owner and staff.
-  features               the parts an event can turn on (the features block of the event's front matter).
-  file_kinds             for each kind of file, the extensions it takes and its largest size in bytes.
+  features               the parts an event can turn on (the features block of the event's front matter). It must
+                         keep registration, attendance and gallery, which the code turns rules on by.
+  file_kinds             for each kind of file, the extensions it takes and its largest size in bytes. It must
+                         keep gallery, whose photos need alt text.
   inline_extensions      the files a browser may show in place. Every other file downloads.
   video_hosts            the hosts a hosted video link in the gallery may point at.
   check_in_code_seconds  how long one check-in code lasts. The code before it is still accepted.
@@ -44,6 +46,11 @@ MAX_BYTES_CAP = 20000000  # so a typo in max_bytes cannot open the upload route 
 WORD = re.compile(r"[a-z]+(_[a-z]+)*")  # statuses and roles are stored in 16-character columns and sent in queries
 EXTENSION = re.compile(r"[a-z0-9]+")
 HOST = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+")
+# The features and the file kind model/event.py turns rules on by. The file must keep them, so a kit that drops one
+# stops at startup with a message naming it, not later with a KeyError on somebody's request.
+REGISTRATION, ATTENDANCE, GALLERY = "registration", "attendance", "gallery"
+CODE_FEATURES = (REGISTRATION, ATTENDANCE, GALLERY)
+GALLERY_KIND = "gallery"
 
 
 def _fail(key, problem):
@@ -100,6 +107,9 @@ def _check(data):
     if not isinstance(data["manager_roles"], list) or not set(data["manager_roles"]) <= set(participant_roles):
         _fail("manager_roles", "must be a list of participant_roles")
     _words(data["features"], "features")
+    missing = [name for name in CODE_FEATURES if name not in data["features"]]
+    if missing:
+        _fail("features", f"must keep {', '.join(missing)}: the service's code turns rules on by these names")
 
     kinds = data["file_kinds"]
     if not isinstance(kinds, dict) or not kinds:
@@ -116,6 +126,8 @@ def _check(data):
         every_extension.update(extensions)
         if not _whole(rule["max_bytes"], 1, MAX_BYTES_CAP):
             _fail(f"file_kinds.{kind}.max_bytes", f"must be a whole number from 1 to {MAX_BYTES_CAP:,}")
+    if GALLERY_KIND not in kinds:
+        _fail("file_kinds", f"must keep {GALLERY_KIND}: the service's code checks gallery photos by this name")
     inline = data["inline_extensions"]
     if not isinstance(inline, list) or not set(inline) <= every_extension:
         _fail("inline_extensions", "must be a list of extensions the file kinds take")

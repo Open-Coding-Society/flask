@@ -77,8 +77,8 @@ asks `model/event_rules.py`, so a kit changes the lifecycle or adds a role (say 
 | `publish_roles` | The account roles that may publish an event. `null` means the `staff_roles` in `account_types.json`. |
 | `participant_roles` | The roles a person can have in one event. The first is the one a new participant gets. |
 | `manager_roles` | The participant roles that may manage the event, besides its owner and staff. |
-| `features` | The parts an event can turn on (its front matter's `features` block). A key an event leaves out is off. |
-| `file_kinds` | For each kind of file, its `extensions` and `max_bytes` (1 to 20,000,000). |
+| `features` | The parts an event can turn on (its front matter's `features` block). A key an event leaves out is off. Keep `registration`, `attendance` and `gallery`: the code turns rules on by those names, so the app refuses to start without them. |
+| `file_kinds` | For each kind of file, its `extensions` and `max_bytes` (1 to 20,000,000). Keep `gallery`: the code checks gallery photos (alt text, the gallery feature) by that name, so the app refuses to start without it. |
 | `inline_extensions` | The files a browser may show in place. Every other file downloads. |
 | `video_hosts` | The hosts a hosted video link in the gallery may point at. |
 | `check_in_code_seconds` | How long one check-in code lasts (30 to 3600). The code before it is still accepted. |

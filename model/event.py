@@ -33,6 +33,7 @@ from werkzeug.utils import secure_filename
 
 from __init__ import db
 from model import account_types, event_fields, event_rules, event_storage, permissions
+from model.event_rules import ATTENDANCE, GALLERY, GALLERY_KIND, REGISTRATION  # names event_rules.json must keep
 from model.presence import to_iso_z, utc_now
 from model.presence_schedule import ScheduleError, check_timezone, parse_clock, parse_date
 from model.user import User
@@ -121,8 +122,6 @@ SCHEDULE_KEYS = ('date', 'start_time', 'end_time', 'timezone')  # the keys that 
 GOING, WAITLIST, DECLINED = 'going', 'waitlist', 'declined'
 RSVPS = (GOING, WAITLIST, DECLINED)  # or None, for a walk-in
 BY_QR, BY_ORGANIZER = 'qr', 'organizer'
-# Mort's feature keys that switch a rule on (the features list in event_rules.json)
-REGISTRATION, ATTENDANCE, GALLERY = 'registration', 'attendance', 'gallery'
 
 
 def _length(model, column):
@@ -692,7 +691,7 @@ class Event(db.Model):
         rule = event_rules.file_kind(kind) if isinstance(kind, str) else None
         if rule is None:
             raise EventError('bad_kind', kinds=list(event_rules.kinds()))
-        if kind == GALLERY and not self.features[GALLERY]:
+        if kind == GALLERY_KIND and not self.features[GALLERY]:
             raise EventError('gallery_off', 409)
         if not isinstance(group, str) or not event_fields.GROUP.fullmatch(group):
             raise EventError('bad_group')
@@ -714,7 +713,7 @@ class Event(db.Model):
         check = event_fields.SIGNATURES.get(extension)
         if check is None or not check(data):
             raise EventError('bad_content')
-        alt_text = Event._alt(alt, required=kind == GALLERY)
+        alt_text = Event._alt(alt, required=kind == GALLERY_KIND)
 
         key = f"{self.id}/{uuid4().hex}.{extension}"
         content_type = event_storage.EXT_TYPES[extension]
@@ -746,7 +745,7 @@ class Event(db.Model):
             raise EventError('bad_content')
 
     def _add_video(self, actor, group, kind, name, link):
-        saved = event_fields.video_link(link, _length(EventFile, '_link')) if kind == GALLERY else None
+        saved = event_fields.video_link(link, _length(EventFile, '_link')) if kind == GALLERY_KIND else None
         if saved is None:
             raise EventError('bad_video', hosts=list(event_rules.video_hosts()))
         if self.files.filter_by(_group=group, _link=saved).first() is not None:
@@ -1185,7 +1184,7 @@ class EventFile(db.Model):
     @property
     def is_photo(self):
         """A file in the gallery (not a hosted video): it needs alt text."""
-        return self._kind == GALLERY and self._key is not None
+        return self._kind == GALLERY_KIND and self._key is not None
 
     def answer(self):
         """The response that sends the file: its bytes, or a redirect to S3. A hosted video has nothing stored."""
