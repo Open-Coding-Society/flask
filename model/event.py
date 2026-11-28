@@ -27,7 +27,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from flask import current_app
-from sqlalchemy import or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.exc import IntegrityError
 from werkzeug.utils import secure_filename
 
@@ -316,7 +316,8 @@ class Event(db.Model):
         raise EventError('page_taken', 409, page_path=page_path, **found)
 
     # CRUD read: Mort's keys, the counts and the files. Never a person's name or uid, and never the secret.
-    def read(self, for_user=None, include_body=True):
+    # A list's read (full=False) leaves out the body and the files, and takes its counts from list_counts.
+    def read(self, for_user=None, full=True, counts=None):
         data = self._data or {}
         event = {
             'id': self.id,
@@ -335,11 +336,12 @@ class Event(db.Model):
             'registration': {'enabled': self._registration_enabled, 'capacity': self._capacity},
             'features': self.features,
             'notice': self._notice,
-            'counts': self.counts(),
-            'files': [file.read() for file in self.files.order_by(EventFile.id)],
+            'counts': counts if counts is not None else self.counts(),
         }
+        if full:
+            event['files'] = [file.read() for file in self.files.order_by(EventFile.id)]
         for key in event_fields.DEFINITION_FIELDS:
-            if key in data and (include_body or key != 'body'):
+            if key in data and (full or key != 'body'):
                 event[key] = data[key]
         if self.can_manage(for_user):
             event['calendar_item_id'] = data.get('calendar_item_id')
@@ -509,13 +511,26 @@ class Event(db.Model):
         return self.participants.filter_by(_rsvp=GOING).count()
 
     def counts(self):
-        going = self._going()
-        return {
-            'going': going,
-            'waitlist': self.participants.filter_by(_rsvp=WAITLIST).count(),
-            'checked_in': self.participants.filter(EventParticipant._checked_in_at.isnot(None)).count(),
-            'spots_left': None if self._capacity is None else max(self._capacity - going, 0),
-        }
+        return self._counts(self._going(), self.participants.filter_by(_rsvp=WAITLIST).count(),
+                            self.participants.filter(EventParticipant._checked_in_at.isnot(None)).count())
+
+    def _counts(self, going, waitlist, checked_in):
+        return {'going': going, 'waitlist': waitlist, 'checked_in': checked_in,
+                'spots_left': None if self._capacity is None else max(self._capacity - going, 0)}
+
+    @staticmethod
+    def list_counts(events):
+        """{event id: counts()} for a list of events, from one grouped query instead of three for each event."""
+        if not events:
+            return {}
+        rows = (db.session.query(EventParticipant._event_id,
+                                 func.sum(case((EventParticipant._rsvp == GOING, 1), else_=0)),
+                                 func.sum(case((EventParticipant._rsvp == WAITLIST, 1), else_=0)),
+                                 func.count(EventParticipant._checked_in_at))  # counts the times that are set
+                .filter(EventParticipant._event_id.in_([event.id for event in events]))
+                .group_by(EventParticipant._event_id))
+        totals = {event_id: (int(going or 0), int(waiting or 0), int(arrived or 0)) for event_id, going, waiting, arrived in rows}
+        return {event.id: event._counts(*totals.get(event.id, (0, 0, 0))) for event in events}
 
     def roster(self, actor):
         """Everyone in the event, by when they signed up (walk-ins last), then by name. Only its managers see it."""

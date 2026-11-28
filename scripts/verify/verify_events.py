@@ -26,7 +26,7 @@ REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
 REAL_FILES = os.path.join(REPO, "instance", "data", "events")
 RULES = os.path.join(REPO, "model", "dataconfigs", "event_rules.json")
 PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run; the accounts live only in the throwaway database
-TOTAL = 60
+TOTAL = 61
 PEOPLE = {"zz_teacher": "Teacher", "zz_admin": "Admin", "zz_alice": "User", "zz_bob": "User",
           "zz_carol": "User", "zz_dave": "User", "zz_guest": "Guest"}
 FUTURE = (date.today() + timedelta(days=400)).isoformat()  # far enough ahead that RSVPs stay open whenever this runs
@@ -1187,6 +1187,30 @@ def main():
             for name, requests_listed in lists.items():
                 out_of_place = [a for a, b in zip(requests_listed, sorted(requests_listed, key=by_path)) if a != b]
                 check(60, f"{name} is sorted by path, then method, with the event requests in their places", not out_of_place, out_of_place[:3])
+
+        # ---------------------------------------------------------------- list reads
+        with checking(61):
+            from sqlalchemy import event as sql_events
+            statements = []
+            count_statement = lambda *_args, **_kwargs: statements.append(1)
+
+            def listing(**query):
+                del statements[:]
+                r = anon.get("/api/event", query_string=query)
+                return len(statements), body_of(r).get("events", [])
+            sql_events.listen(first_engine, "before_cursor_execute", count_statement)
+            try:
+                few_queries, few = listing(status="archived")
+                many_queries, many = listing()
+            finally:
+                sql_events.remove(first_engine, "before_cursor_execute", count_statement)
+            check(61, f"a list of {len(many)} events takes as many queries as a list of {len(few)} ({many_queries} and {few_queries}): the counts are one grouped query",
+                  0 < len(few) < len(many) and many_queries == few_queries, f"{few_queries} for {len(few)}, {many_queries} for {len(many)}")
+            check(61, "a list read leaves out files and body", many and all("files" not in e and "body" not in e for e in many))
+            single = {e["id"]: event_of(anon.get("/api/event", query_string={"id": e["id"]})) for e in many}
+            check(61, "and its counts are the single read's", all(e.get("counts") == single[e["id"]].get("counts") for e in many),
+                  [(e["id"], e.get("counts"), single[e["id"]].get("counts")) for e in many if e.get("counts") != single[e["id"]].get("counts")][:2])
+            check(61, "while a single read still has its files", "files" in single[ids["e1"]] and "body" in single[ids["e1"]])
 
         # ---------------------------------------------------------------- error extras: last, so it reads every answer
         with checking(48):

@@ -120,13 +120,14 @@ class EventAPI:
             if 'id' in request.args:
                 return with_viewer(Event.find(request.args.get('id'), user), user)
 
-            ''' A list: every public event, or the events the caller manages, drafts included '''
+            ''' A list: every public event, or the events the caller manages, drafts included, without bodies or files '''
             mine = request.args.get('mine', '').lower() == 'true'
             if mine and user is None:
                 raise EventError('mine_needs_login', 401)
             statuses, since = Event.filters(request.args.get('status'), request.args.get('since'))
             events = Event.listing(statuses, since, managed_by=user if mine else None)
-            return {'events': [event.read(user, include_body=False) for event in events], 'count': len(events),
+            counts = Event.list_counts(events)  # one query for the whole list
+            return {'events': [event.read(user, full=False, counts=counts[event.id]) for event in events], 'count': len(events),
                     'viewer': Event.caller_view(user)}
 
         @token_required(STAFF)
