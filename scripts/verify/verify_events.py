@@ -26,7 +26,7 @@ REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
 REAL_FILES = os.path.join(REPO, "instance", "data", "events")
 RULES = os.path.join(REPO, "model", "dataconfigs", "event_rules.json")
 PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run; the accounts live only in the throwaway database
-TOTAL = 53
+TOTAL = 54
 PEOPLE = {"zz_teacher": "Teacher", "zz_admin": "Admin", "zz_alice": "User", "zz_bob": "User",
           "zz_carol": "User", "zz_dave": "User", "zz_guest": "Guest"}
 FUTURE = (date.today() + timedelta(days=400)).isoformat()  # far enough ahead that RSVPs stay open whenever this runs
@@ -1054,6 +1054,16 @@ def main():
             except ValueError as error:
                 refused = "first_year" in str(error)
             check(53, "event_rules.json with first_year after last_year is refused, naming the key", refused)
+
+        # ---------------------------------------------------------------- page_taken names a draft only to its managers
+        with checking(54):
+            march_path = "/events/verify-march/"  # the teacher's draft from check 3, which alice does not manage
+            r = alice.put("/api/event", json={"id": ids["co"], "page_path": march_path})
+            check(54, "alice, an organizer of another draft, moving it onto that address is 409 page_taken without the draft's id",
+                  r.status_code == 409 and code_of(r) == "page_taken" and "id" not in body_of(r), f"{r.status_code} {body_of(r)}")
+            r = teacher.put("/api/event", json={"id": ids["co"], "page_path": march_path})
+            check(54, "the teacher, who can manage it, gets its id", r.status_code == 409 and code_of(r) == "page_taken"
+                  and body_of(r).get("id") == ids["march"], f"{r.status_code} {body_of(r)}")
 
         # ---------------------------------------------------------------- error extras: last, so it reads every answer
         with checking(48):

@@ -295,20 +295,23 @@ class Event(db.Model):
 
     # CRUD create: save a new event from Event.validate's values. A page_path already in use is page_taken.
     def create(self, values):
+        owner = self.owner
         self._apply(values)
         try:
             db.session.add(self)
             db.session.commit()
         except IntegrityError:
-            Event._page_taken(values['page_path'])
+            Event._page_taken(values['page_path'], owner)
         return self
 
     @staticmethod
-    def _page_taken(page_path):
-        """After a unique page_path refused a save: roll back, and answer with the event that has it."""
+    def _page_taken(page_path, actor):
+        """After a unique page_path refused a save: roll back, and answer 409. The event that has the address is named
+        by its id only to someone who can manage it, so another organizer's draft stays hidden."""
         db.session.rollback()
         existing = Event.by_page(page_path)
-        raise EventError('page_taken', 409, page_path=page_path, id=existing.id if existing else None)
+        found = {'id': existing.id} if existing is not None and existing.can_manage(actor) else {}
+        raise EventError('page_taken', 409, page_path=page_path, **found)
 
     # CRUD read: Mort's keys, the counts and the files. Never a person's name or uid, and never the secret.
     def read(self, for_user=None, include_body=True):
@@ -353,7 +356,7 @@ class Event(db.Model):
             self._promote()  # a capacity that grew moves the waitlist up, first in, first out
             db.session.commit()
         except IntegrityError:
-            Event._page_taken(page_path)  # a draft moved onto another event's address
+            Event._page_taken(page_path, actor)  # a draft moved onto another event's address
         return self
 
     # CRUD delete: only a draft that nobody has joined and that has no files
