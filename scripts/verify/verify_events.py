@@ -26,7 +26,7 @@ REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
 REAL_FILES = os.path.join(REPO, "instance", "data", "events")
 RULES = os.path.join(REPO, "model", "dataconfigs", "event_rules.json")
 PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run; the accounts live only in the throwaway database
-TOTAL = 59
+TOTAL = 60
 PEOPLE = {"zz_teacher": "Teacher", "zz_admin": "Admin", "zz_alice": "User", "zz_bob": "User",
           "zz_carol": "User", "zz_dave": "User", "zz_guest": "Guest"}
 FUTURE = (date.today() + timedelta(days=400)).isoformat()  # far enough ahead that RSVPs stay open whenever this runs
@@ -1176,6 +1176,17 @@ def main():
                       message.startswith("event_rules.json: features") and feature in message, message or "accepted")
             message = refusal(lambda d: d["file_kinds"].pop("gallery"))
             check(59, "and without the gallery file kind, naming file_kinds", message.startswith("event_rules.json: file_kinds") and "gallery" in message, message or "accepted")
+
+        # ---------------------------------------------------------------- permissions.json keeps flask#146's order
+        with checking(60):
+            with open(os.path.join(REPO, "model", "dataconfigs", "permissions.json"), encoding="utf-8") as fh:
+                permissions_file = json.load(fh)
+            by_path = lambda request: (request.split(" ", 1)[1], request.split(" ", 1)[0])
+            lists = {"public": permissions_file["public"], "signed_in": permissions_file["signed_in"],
+                     "roles.Admin": permissions_file["roles"]["Admin"], "roles.Teacher": permissions_file["roles"]["Teacher"]}
+            for name, requests_listed in lists.items():
+                out_of_place = [a for a, b in zip(requests_listed, sorted(requests_listed, key=by_path)) if a != b]
+                check(60, f"{name} is sorted by path, then method, with the event requests in their places", not out_of_place, out_of_place[:3])
 
         # ---------------------------------------------------------------- error extras: last, so it reads every answer
         with checking(48):
