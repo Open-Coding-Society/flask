@@ -38,6 +38,7 @@ from api.user_preferences import user_preferences_api
 from api.snapshot_proxy import snapshot_proxy
 from api.rfid_api import rfid_api
 from api.presence_api import presence_api
+from api.event import event_api
 #from api.announcement import announcement_api ##temporary revert
 
 # database Initialization functions
@@ -57,6 +58,7 @@ from model.skill_snapshot import SkillSnapshot
 from model.post import Post, init_posts
 from model.microblog import MicroBlog, Topic, initMicroblogs
 from model.leaderboard import ScoreCounterEvent, ElementaryLeaderboardEvent
+from model.event import Event, EventParticipant, EventFile
 from hacks.jokes import initJokes 
 # from model.announcement import Announcement ##temporary revert
 
@@ -100,6 +102,7 @@ app.register_blueprint(user_preferences_api)  # Styling, language and text-to-sp
 app.register_blueprint(snapshot_proxy)  # Register the snapshot proxy API
 app.register_blueprint(rfid_api)  # Register the RFID attendance API
 app.register_blueprint(presence_api)  # Register the generic presence event API
+app.register_blueprint(event_api)  # Events: the Event Service (api/event.py)
 # app.register_blueprint(announcement_api) ##temporary revert
 
 # Jokes file initialization

@@ -1,0 +1,290 @@
+# Event Service walkthrough (events, RSVPs, check-in, files) for api/event.py.
+# Select the REST Client environment, then send each numbered request top to bottom,
+# checking the expected status in its heading. The uid and password are prompts; never
+# write them into this file. Creates real rows in the selected environment: one event at
+# @pagePath, your RSVP and check-in, a photo and a video link. Run it once per database:
+# the event ends archived, which is read only (removing a file is the one change left).
+@pagePath = /events/events-demo/
+
+### 1. Authenticate as a Teacher or Admin (expect 200)
+# @name login
+# @prompt uid Enter a Teacher or Admin user ID
+# @prompt password Enter your password
+POST {{baseUrl}}/api/authenticate
+Content-Type: application/json
+Accept: application/json
+
+{
+  "uid": "{{uid}}",
+  "password": "{{password}}"
+}
+
+### 2. The options a page checks an event with: statuses and moves, roles, file kinds, limits with first_year and last_year (expect 200)
+GET {{baseUrl}}/api/event/options
+Accept: application/json
+
+### 3. The list of public events, by start (expect 200)
+GET {{baseUrl}}/api/event
+Accept: application/json
+
+### 4. Create the event with the event front matter keys (pages#2089), as a draft (expect 201; 409 with the existing id if it already exists)
+# @name createEvent
+POST {{baseUrl}}/api/event
+Content-Type: application/json
+Accept: application/json
+
+{
+  "page_path": "{{pagePath}}",
+  "title": "Community Technology Workshop (demo)",
+  "description": "An introduction to practical AI.",
+  "date": "2027-03-15",
+  "start_time": "10:00",
+  "end_time": "13:00",
+  "timezone": "America/Los_Angeles",
+  "categories": ["Community", "Technology", "Workshop"],
+  "event_type": "workshop",
+  "location": {"name": "Community Center", "address": "Poway, California"},
+  "organizer": {"name": "Open Coding Society"},
+  "registration": {"enabled": true, "capacity": 50},
+  "attachments": [{"type": "gallery", "id": "workshop-gallery"}, {"type": "document", "id": "workshop-agenda"}],
+  "features": {"microblog": true, "registration": true, "attendance": true, "gallery": true},
+  "body": "## Agenda\n\nBring a laptop."
+}
+
+### 4b. A start time the clocks skip, 02:30 on 2027-03-14 in Los Angeles: refused, and nothing is made (expect 400, code "no_such_time", field "start_time")
+POST {{baseUrl}}/api/event
+Content-Type: application/json
+Accept: application/json
+
+{
+  "page_path": "/events/events-demo-clock-change/",
+  "title": "Clock change (demo)",
+  "date": "2027-03-14",
+  "start_time": "02:30",
+  "end_time": "04:00",
+  "timezone": "America/Los_Angeles"
+}
+
+### 5. Read it by its page: a draft, which only its managers see, and it can move only to published (expect 200, viewer.next_statuses ["published"])
+# @name event
+GET {{baseUrl}}/api/event?page_path={{pagePath}}
+Accept: application/json
+
+### 6. Open registration straight from draft: refused, and allowed lists where it can go (expect 409, code "transition")
+PUT {{baseUrl}}/api/event/status
+Content-Type: application/json
+Accept: application/json
+
+{
+  "id": {{event.response.body.$.event.id}},
+  "status": "registration"
+}
+
+### 7. Publish it (expect 200, status "published" and published_at set)
+PUT {{baseUrl}}/api/event/status
+Content-Type: application/json
+Accept: application/json
+
+{
+  "id": {{event.response.body.$.event.id}},
+  "status": "published"
+}
+
+### 8. Set the organizer's notice, the banner at the top of the page (expect 200)
+PUT {{baseUrl}}/api/event
+Content-Type: application/json
+Accept: application/json
+
+{
+  "id": {{event.response.body.$.event.id}},
+  "notice": "Doors open at 9:45"
+}
+
+### 9. Open registration (expect 200, status "registration")
+PUT {{baseUrl}}/api/event/status
+Content-Type: application/json
+Accept: application/json
+
+{
+  "id": {{event.response.body.$.event.id}},
+  "status": "registration"
+}
+
+### 10. RSVP (expect 200, rsvp "going")
+PUT {{baseUrl}}/api/event/rsvp
+Content-Type: application/json
+Accept: application/json
+
+{
+  "event_id": {{event.response.body.$.event.id}}
+}
+
+### 11. Cancel the RSVP (expect 200, rsvp "declined")
+DELETE {{baseUrl}}/api/event/rsvp
+Content-Type: application/json
+Accept: application/json
+
+{
+  "event_id": {{event.response.body.$.event.id}}
+}
+
+### 12. RSVP again (expect 200, rsvp "going")
+PUT {{baseUrl}}/api/event/rsvp
+Content-Type: application/json
+Accept: application/json
+
+{
+  "event_id": {{event.response.body.$.event.id}}
+}
+
+### 13. The check-in code before the event is active: refused (expect 409, code "not_open", action "check_in")
+GET {{baseUrl}}/api/event/checkin?event_id={{event.response.body.$.event.id}}
+Accept: application/json
+
+### 14. Start the event (expect 200, status "active")
+PUT {{baseUrl}}/api/event/status
+Content-Type: application/json
+Accept: application/json
+
+{
+  "id": {{event.response.body.$.event.id}},
+  "status": "active"
+}
+
+### 15. The check-in code for the screen, new every 5 minutes (expect 200)
+# @name code
+GET {{baseUrl}}/api/event/checkin?event_id={{event.response.body.$.event.id}}
+Accept: application/json
+
+### 16. Check in with that code, as someone at the door would (expect 200, checked_in_at set)
+POST {{baseUrl}}/api/event/checkin
+Content-Type: application/json
+Accept: application/json
+
+{
+  "event_id": {{event.response.body.$.event.id}},
+  "code": "{{code.response.body.$.code}}"
+}
+
+### 17. Check in with a code that is not on the screen (expect 400, code "bad_code")
+POST {{baseUrl}}/api/event/checkin
+Content-Type: application/json
+Accept: application/json
+
+{
+  "event_id": {{event.response.body.$.event.id}},
+  "code": "AAAAAAAA"
+}
+
+### 18. The roster, for the event's managers (expect 200)
+GET {{baseUrl}}/api/event/participants?event_id={{event.response.body.$.event.id}}
+Accept: application/json
+
+### 19. Clear your own check-in, as an organizer would by name (expect 200, checked_in_at null)
+PUT {{baseUrl}}/api/event/participants
+Content-Type: application/json
+Accept: application/json
+
+{
+  "event_id": {{event.response.body.$.event.id}},
+  "uid": "{{login.response.body.$.user.uid}}",
+  "checked_in": false
+}
+
+### 20. Add a tiny PNG to the gallery, with its alt text (expect 201)
+# @name photo
+POST {{baseUrl}}/api/event/files
+Content-Type: application/json
+Accept: application/json
+
+{
+  "event_id": {{event.response.body.$.event.id}},
+  "group": "workshop-gallery",
+  "kind": "gallery",
+  "name": "dot.png",
+  "content": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+  "alt": "A single dot, standing in for a photo of the workshop"
+}
+
+### 21. The file itself (expect 200, image/png, shown inline)
+GET {{baseUrl}}/api/event/files?id={{photo.response.body.$.file.id}}
+
+### 22. Change the photo's alt text (expect 200)
+PUT {{baseUrl}}/api/event/files
+Content-Type: application/json
+Accept: application/json
+
+{
+  "id": {{photo.response.body.$.file.id}},
+  "alt": "A single dot on a white background"
+}
+
+### 23. Add a YouTube link to the gallery; only the link is kept (expect 201, with link and no url)
+# @name video
+POST {{baseUrl}}/api/event/files
+Content-Type: application/json
+Accept: application/json
+
+{
+  "event_id": {{event.response.body.$.event.id}},
+  "group": "workshop-gallery",
+  "kind": "gallery",
+  "name": "Workshop recording",
+  "link": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+}
+
+### 23b. The same link again in the same group: refused (expect 409, code "link_taken")
+POST {{baseUrl}}/api/event/files
+Content-Type: application/json
+Accept: application/json
+
+{
+  "event_id": {{event.response.body.$.event.id}},
+  "group": "workshop-gallery",
+  "kind": "gallery",
+  "name": "Workshop recording",
+  "link": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+}
+
+### 24a. Complete the event (expect 200, status "completed")
+PUT {{baseUrl}}/api/event/status
+Content-Type: application/json
+Accept: application/json
+
+{
+  "id": {{event.response.body.$.event.id}},
+  "status": "completed"
+}
+
+### 24b. Then archive it (expect 200, status "archived")
+PUT {{baseUrl}}/api/event/status
+Content-Type: application/json
+Accept: application/json
+
+{
+  "id": {{event.response.body.$.event.id}},
+  "status": "archived"
+}
+
+### 25. Change an archived event: refused, it is read only (expect 409, code "not_open", action "edit")
+PUT {{baseUrl}}/api/event
+Content-Type: application/json
+Accept: application/json
+
+{
+  "id": {{event.response.body.$.event.id}},
+  "title": "Changed after the event"
+}
+
+### 25b. Remove the video link from the archived event: a manager can always take a file down (expect 204)
+DELETE {{baseUrl}}/api/event/files
+Content-Type: application/json
+Accept: application/json
+
+{
+  "id": {{video.response.body.$.file.id}}
+}
+
+### 26. The events bundle a migration copies (expect 200 as an Admin; 403 for a Teacher)
+GET {{baseUrl}}/api/export/events
+Accept: application/json

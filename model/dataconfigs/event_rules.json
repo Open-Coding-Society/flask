@@ -1,0 +1,34 @@
+{
+  "page_prefix": "/events/",
+  "default_timezone": "America/Los_Angeles",
+  "statuses": ["draft", "published", "registration", "active", "completed", "archived"],
+  "private_statuses": ["draft"],
+  "transitions": {
+    "draft": ["published"],
+    "published": ["draft", "registration", "active", "archived"],
+    "registration": ["published", "active", "archived"],
+    "active": ["completed"],
+    "completed": ["archived"],
+    "archived": []
+  },
+  "open_for": {
+    "edit": ["draft", "published", "registration", "active", "completed"],
+    "rsvp": ["registration"],
+    "check_in": ["active"],
+    "files": ["draft", "published", "registration", "active", "completed"],
+    "delete": ["draft"]
+  },
+  "publish_roles": null,
+  "participant_roles": ["attendee", "organizer"],
+  "manager_roles": ["organizer"],
+  "features": ["microblog", "registration", "attendance", "gallery"],
+  "file_kinds": {
+    "document": {"extensions": ["pdf", "docx", "pptx", "png", "jpg", "jpeg"], "max_bytes": 10000000},
+    "gallery": {"extensions": ["jpg", "jpeg", "png", "gif", "webp"], "max_bytes": 10000000}
+  },
+  "inline_extensions": ["pdf", "png", "jpg", "jpeg", "gif", "webp"],
+  "video_hosts": ["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "drive.google.com"],
+  "check_in_code_seconds": 300,
+  "s3_prefix": "flask/events/",
+  "limits": {"text": 200, "description": 500, "body": 20000, "list": 20, "alert_days": 365, "first_year": 2000, "last_year": 2100}
+}

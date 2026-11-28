@@ -53,6 +53,7 @@ IMPORT_ENDPOINTS = {
     'elementary_leaderboard': '/api/export/import/elementary_leaderboard',
     'skill_snapshots':        '/api/export/import/skill_snapshots',
     'presence':               '/api/export/import/presence',  # one bundle, see model/presence_backup.py
+    'events':                 '/api/export/import/events',    # one bundle, see model/event_backup.py
 }
 
 # Data types large enough to need batched uploads
@@ -181,6 +182,10 @@ def read_local_data_from_db():
             from model.presence_backup import export_presence
             all_data['presence'] = export_presence()
             print(f"    Found presence data: " + ", ".join(f"{len(v)} {k}" for k, v in all_data['presence'].items()))
+
+            from model.event_backup import export_events
+            all_data['events'] = export_events()
+            print(f"    Found event data: " + ", ".join(f"{len(v)} {k}" for k, v in all_data['events'].items()))
 
             return all_data, None
 

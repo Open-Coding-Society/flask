@@ -107,6 +107,12 @@ pip install -r requirements.txt
   RFID_API_KEY=xxxxx
   # Optional: true once the camera posts face-check results (default false = "RFID only")
   CAMERA_ENABLED=false
+  # Optional: keep event files in S3 instead of instance/data/events (the same names as Spring's .env)
+  # AWS_BUCKET_NAME=xxxxx
+  # AWS_ACCESS_KEY_ID=xxxxx
+  # AWS_SECRET_ACCESS_KEY=xxxxx
+  # AWS_REGION=us-east-1
+  # AWS_S3_ENDPOINT=http://localhost:4566  # only for a local fake S3
   # DB Configuration, AWS RDS
   IS_PRODUCTION=false # false = LOCAL true = DEPLOYED
   DB_USERNAME='admin'
@@ -189,6 +195,22 @@ lists every member. Enrolling in the same room again switches the period, and
 `DELETE /api/presence/enroll/me/<room_id>` leaves it. A room without a schedule
 takes `"period_name": null`, meaning every period.
 
+#### Event system sequence
+
+Open [api/event.http](api/event.http). It walks through the Event Service top to bottom:
+authenticate as a Teacher or Admin, read the options, create a draft with the event front matter
+keys (pages#2089), publish it, set a notice, open registration and RSVP, start the event and
+check in with the code on the screen, check someone in by name, add a photo with its alt text
+and a YouTube link to the gallery, then complete and archive it, which makes it read only except
+for taking a file down. A few steps show refusals and their codes, such as a time the clocks
+skip (`no_such_time`) and the same video link twice (`link_taken`). Each heading says the status
+to expect. The uid and password are prompts, so nothing secret is in the file. It makes one
+event at `/events/events-demo/`, so run it once per database.
+
+A new database gets the event tables from `db.create_all()` (`./scripts/db_init.py` locally);
+an existing one gets them in place with `python scripts/db_upgrade.py`. Nothing is seeded:
+`generate_data()` runs on rebuilds, so a sample event would reach production.
+
 #### Manual user CRUD sequence
 
 Open [api/user_crud.http](api/user_crud.http) and set `testUid` to a disposable,
@@ -257,6 +279,106 @@ HTTPYac is needed for that.
 | GET | `/api/microblog/page/<page_key>` | Get posts for specific page |
 | POST | `/api/microblog/topics/auto-create` | Auto-create topic for page |
 | GET | `/api/microblog/topics?pagePath=X` | Get topic by page path |
+
+### Event Operations
+| Method | Endpoint | Who | Description |
+|--------|----------|-----|-------------|
+| GET | `/api/event?page_path=X` or `?id=N` | anyone | One event, and what the caller can do with it (`viewer`). By `page_path`, a page with no event (or a draft you can't see) is `{"event": null}`, not a 404; an unknown `id` is a 404 |
+| GET | `/api/event?status=a,b&since=YYYY-MM-DD` | anyone | Public events by start, without their bodies. `?mine=true` lists the events you manage, drafts included |
+| GET | `/api/event/options` | anyone | The lifecycle, the event roles, file kinds and limits from `model/dataconfigs/event_rules.json` |
+| GET | `/api/event/files?id=N` | anyone | A file of an event you can see: pdf and images inline, Word and PowerPoint as a download |
+| POST | `/api/event` | Teacher, Admin | Create a draft from the event front matter keys (pages#2089) plus `page_path` |
+| PUT, DELETE | `/api/event` | the event's managers | Change it (`{id, ...}`), or delete a draft with no people and no files (`{id}`) |
+| PUT | `/api/event/status` | the event's managers | Move it along the lifecycle (`{id, status}`) |
+| PUT, DELETE | `/api/event/rsvp` | signed in | RSVP (going, or the waitlist when it is full) or cancel (`{event_id}`) |
+| GET | `/api/event/checkin?event_id=N` | the event's managers | The check-in code for the screen, new every 5 minutes |
+| POST | `/api/event/checkin` | signed in | Check in with that code (`{event_id, code}`) |
+| GET, PUT, DELETE | `/api/event/participants` | the event's managers | The roster; check someone in by name or give them a role (`{event_id, uid, checked_in, role}`); remove them |
+| POST, PUT, DELETE | `/api/event/files` | the event's managers | Add a file (`{event_id, group, kind, name, content, alt}`) or a video link (`{..., link}`), change a photo's alt text (`{id, alt}`), remove one (`{id}`) |
+| GET, POST | `/api/export/events`, `/api/export/import/events` | Admin | The events bundle a migration copies |
+
+An archived event is read only: no edits, roles, RSVPs or cancelling, check-ins or new alt text.
+Removing a file is the one change allowed in every status, so a manager can always take a bad photo
+down. What each status allows is `open_for` in `event_rules.json`.
+
+An event's managers are staff, the account that made it, and its participants with a role in
+`manager_roles` (organizer). Every error answer is `{"message", "code"}`, with `code` a key of
+`MESSAGES` in `model/event.py`, so a page can word it. Any other field of an error is an id or a
+number, never English: `not_open`'s `action` is the `open_for` key (`rsvp`), `bad_field` sends
+`kind` and `limit`, `too_big` sends `max_bytes`, and `page_taken` sends the other event's `id`
+only to someone who can manage it. The lifecycle, the event roles and every size are data in
+`model/dataconfigs/event_rules.json` (see its README).
+
+**Dates and times.** An event's date must fall between `first_year` and `last_year` in
+`event_rules.json` (2000 to 2100), or it is `bad_date`. A start or end time the clocks skip, like
+02:30 on the day daylight time starts, is `no_such_time`, and an end is compared with the start as
+an instant, not on the clock. Ids and `registration.capacity` stay within the database's integer
+(2,147,483,647): a larger id is `not_found` and a larger capacity `bad_capacity`. The same video
+link twice in one gallery group is `link_taken`.
+
+```mermaid
+erDiagram
+    users ||--o{ events : owns
+    users ||--o{ event_participants : "joins events as"
+    events ||--o{ event_participants : has
+    events ||--o{ event_files : has
+    events {
+        int id PK
+        string _page_path UK
+        string _status
+        datetime _starts_at
+        int _owner_id FK
+        json _data
+    }
+    event_participants {
+        int _event_id FK
+        int _user_id FK
+        string _role
+        string _rsvp
+        datetime _checked_in_at
+    }
+    event_files {
+        int _event_id FK
+        string _kind
+        string _key UK
+        string _link
+        string _alt
+    }
+```
+
+**Check-ins are a column on `event_participants`, not Presence events.** Presence
+(`api/presence_api.py`) is generic and was weighed first, but it does not fit a door code yet. A
+presence event is worked out as enter or exit, toggling per person, room and period, so a second
+scan of the code would record the person leaving. Every presence event and period needs a room,
+and room names are unique, so each event would need a room made for it. A manual period is
+started by a Teacher or Admin, so an organizer who is not staff could not open check-in. RSVPs and
+the waitlist need one row per person per event anyway, so that row keeps the RSVP and the check-in
+together. RFID can join later without a second store: an event names a presence room, and a tap
+in that room during the event checks the person in with method `rfid`.
+
+**Time zones.** An event's date and times are wall-clock times in its `timezone`, stored as UTC.
+Pages always sends the zone it resolved from `events.timezone` in its `_config.yml`, so
+`default_timezone` in `event_rules.json` only meets someone calling the API directly. Keep the
+two the same.
+
+**Files up to 10 MB each.** Documents can be pdf, docx, pptx, png or jpg, and gallery photos jpg,
+png, gif or webp. Each upload is checked by its extension, its size and its first bytes (a `.png`
+must start like a PNG); svg and html are never accepted. A gallery photo needs alt text. The
+gallery also takes YouTube and Google Drive links, which store nothing but the link. Files are kept
+in `instance/data/events` (not `instance/uploads`, which `/uploads/<path>` serves by path alone), or in S3
+when `AWS_BUCKET_NAME`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set; S3 not answering is
+a 503 with `Retry-After` when a file is added or opened, while removing one still answers 204 and logs
+the bytes it left behind. The 10 MB is `max_bytes` in `event_rules.json`. It needs Flask 3.1 or
+newer (only the upload route raises its body limit; every other route keeps 5 MB) and the nginx
+`location /api/event/files` block in `nginx_flask_8587.conf` (`client_max_body_size 14m`). The
+three change together.
+
+**Deploying it.** The Event Service adds three tables and changes none, so after the deploy
+`python scripts/db_upgrade.py --check` says "In place" and `python scripts/db_upgrade.py` creates
+them (with `--backup-file` on production, see below). Uploads need two steps on the server: copy
+the `location /api/event/files` block into the Flask site's nginx file, then `nginx -t` and reload
+(without it nginx refuses any upload over about 0.75 MB), and rebuild the image so Flask 3.1 is
+installed. The S3 lines in `.env` are optional.
 
 ### Feedback Operations
 | Method | Endpoint | Description |
@@ -437,6 +559,12 @@ by uid, room and schedule name, and event id, so a rebuild with new ids keeps ev
 tag, period, and tap. Each room exports `members` (uid and `period_name`) next to
 `member_uids`; an older export with only `member_uids` imports them for every period. `rfid_card_claims` is deliberately not migrated: a claim lives
 for 60 seconds (see below), so there is nothing to keep across a rebuild.
+
+The Event Service's tables travel together as one `events` bundle (`/api/export/events`,
+`/api/export/import/events`, built in `model/event_backup.py`): `events`, `event_participants`
+and `event_files`. Events are matched by `page_path`, people by uid, stored files by their key,
+and hosted videos by event, group and link, so a rebuild with new ids keeps every RSVP, check-in
+and file. Only the rows move: the files themselves stay on the instance volume or in S3.
 
 **Adding a new model?** It must be added in three places or its data is lost on the next
 migration: `MIGRATED_MODELS` plus export/import endpoints in

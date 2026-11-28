@@ -9,6 +9,7 @@ something, or what a form offers, reads these files; it does not name a role, a 
 | `account_types.json` | The kinds of account, their roles, who counts as staff, how long a verification lasts, what each type may do, and how each behaves on the sign-up form | `model/account_types.py` | `GET /api/signup-options` (the form's part only) |
 | `schools.json` | The schools a student can choose at sign-up | `model/schools.py` | `GET /api/signup-options` |
 | `permissions.json` | Who may make each request: open to anyone, any signed-in account, or only some roles | `model/permissions.py` | not sent |
+| `event_rules.json` | The event lifecycle, what each status allows, who may publish, an event's own roles, features, file kinds and sizes, the check-in code length, the S3 prefix, field size limits | `model/event_rules.py` | `GET /api/event/options` |
 
 Each file is added to this folder in the change that makes its values data. Data files that are not
 here yet: `model/presence_schedules.json`, the starter bell schedules for the presence system.
@@ -59,6 +60,41 @@ role cannot be a staff role. The loader refuses anything else.
 A list of `{"name": ..., "label": ...}`. The **name** is saved on the account; the **label** is what the
 form shows. Names must be unique. Nothing checks an account's school against the list: it is what the
 form offers, not a rule about who can have an account.
+
+## event_rules.json
+
+The rules of the Event Service (`/api/event`, `api/event.py`). Code never names a status or an event role: it
+asks `model/event_rules.py`, so a kit changes the lifecycle or adds a role (say `helper`) by editing this file.
+
+| Key | Meaning |
+|---|---|
+| `page_prefix` | Where event pages live (`/events/`). An event's `page_path` is this plus a slug. |
+| `default_timezone` | The zone of an event that names none. Pages always sends the zone it resolved from `events.timezone` in its `_config.yml`, so this meets only someone calling the API directly. **Keep the two the same.** |
+| `statuses` | The lifecycle, in order. The first is where every event starts. |
+| `private_statuses` | Statuses only the event's managers can see (a draft). Leaving one is publishing. |
+| `transitions` | For each status, the statuses it can move to. |
+| `open_for` | For each action (`edit`, `rsvp`, `check_in`, `files`, `delete`), the statuses that allow it. |
+| `publish_roles` | The account roles that may publish an event. `null` means the `staff_roles` in `account_types.json`. |
+| `participant_roles` | The roles a person can have in one event. The first is the one a new participant gets. |
+| `manager_roles` | The participant roles that may manage the event, besides its owner and staff. |
+| `features` | The parts an event can turn on (its front matter's `features` block). A key an event leaves out is off. Keep `registration`, `attendance` and `gallery`: the code turns rules on by those names, so the app refuses to start without them. |
+| `file_kinds` | For each kind of file, its `extensions` and `max_bytes` (1 to 20,000,000). Keep `gallery`: the code checks gallery photos (alt text, the gallery feature) by that name, so the app refuses to start without it. |
+| `inline_extensions` | The files a browser may show in place. Every other file downloads. |
+| `video_hosts` | The hosts a hosted video link in the gallery may point at. |
+| `check_in_code_seconds` | How long one check-in code lasts (30 to 3600). The code before it is still accepted. |
+| `s3_prefix` | Where event files go in the S3 bucket, when S3 is set up. |
+| `limits` | The most characters (`text`, `description`, `body`), items (`list`) and days (`alert_days`) a field of an event's definition may have, and the first and last year (`first_year`, `last_year`: 2000 and 2100) an event's date and a list's `since` may be in. The years must run from 1 to 9998, `first_year` no later than `last_year`. |
+
+**Files up to 10 MB each.** `max_bytes` is 10,000,000 for both kinds. A file is sent as base64, about 4/3 of its
+size, so `POST /api/event/files` alone reads bodies up to the largest `max_bytes` × 4/3 + 64 KB; every other route
+keeps the 5 MB limit. That needs Flask 3.1 or newer (`requirements.txt`) and the `location /api/event/files`
+block in `nginx_flask_8587.conf`, whose `client_max_body_size 14m` must stay at least `max_bytes` × 4/3 + 64 KB.
+**`max_bytes` and the nginx line change together.**
+
+`GET /api/event/options` sends this file without `s3_prefix`, with `publish_roles` as role names, plus the
+`page_path` pattern and the column sizes the model owns (`title` and `page_path` 120, `notice` 280, `alt` 200), so
+the Event Builder checks an event with the same numbers. `python scripts/verify/verify_events.py` checks the
+service, including edited copies of this file, which it writes to a temporary folder.
 
 ## permissions.json
 

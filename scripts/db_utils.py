@@ -83,7 +83,7 @@ def is_default_user(uid):
 MIGRATED_TYPES = [
     'sections', 'users', 'topics', 'microblogs', 'posts', 'classrooms',
     'feedback', 'study', 'personas', 'user_personas',
-    'leaderboard', 'elementary_leaderboard', 'skill_snapshots', 'presence',
+    'leaderboard', 'elementary_leaderboard', 'skill_snapshots', 'presence', 'events',
 ]
 
 
@@ -127,6 +127,8 @@ def local_counts():
     counts['classroom_students'] = db.session.query(classroom_student).count()
     from model.presence_backup import presence_counts
     counts.update(presence_counts())  # same keys as /api/export/counts
+    from model.event_backup import event_counts
+    counts.update(event_counts())
     return counts
 
 
