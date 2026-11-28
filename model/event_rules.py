@@ -19,7 +19,8 @@
   check_in_code_seconds  how long one check-in code lasts. The code before it is still accepted.
   s3_prefix              where event files go in the S3 bucket, when S3 is set up.
   limits                 the most characters (text, description, body), items (list) and days (alert_days) a
-                         field of an event's definition may have.
+                         field of an event's definition may have, and the first and last year an event's date
+                         (and a list's since) may be in (first_year, last_year).
 
 Code never names a status or a participant role: it asks this module, so a kit changes the lifecycle or adds a
 role (say helper) by editing the data file alone. The file is read once, at startup, and bad data stops the app
@@ -37,7 +38,8 @@ KEYS = ("page_prefix", "default_timezone", "statuses", "private_statuses", "tran
         "publish_roles", "participant_roles", "manager_roles", "features", "file_kinds", "inline_extensions",
         "video_hosts", "check_in_code_seconds", "s3_prefix", "limits")
 ACTIONS = ("edit", "rsvp", "check_in", "files", "delete")
-LIMITS = ("text", "description", "body", "list", "alert_days")
+LIMITS = ("text", "description", "body", "list", "alert_days", "first_year", "last_year")
+YEARS = (1, 9998)  # the years datetime has, less the last: an all-day event on its last day would end in year 10000
 MAX_BYTES_CAP = 20000000  # so a typo in max_bytes cannot open the upload route to huge bodies
 WORD = re.compile(r"[a-z]+(_[a-z]+)*")  # statuses and roles are stored in 16-character columns and sent in queries
 EXTENSION = re.compile(r"[a-z0-9]+")
@@ -138,6 +140,9 @@ def _check(data):
     for name, value in limits.items():
         if not _whole(value, 1, 10 ** 9):
             _fail(f"limits.{name}", "must be a positive whole number")
+    first, last = limits["first_year"], limits["last_year"]
+    if not (_whole(first, *YEARS) and _whole(last, first, YEARS[1])):
+        _fail("limits.first_year", f"and last_year must be years from {YEARS[0]} to {YEARS[1]}, first_year no later than last_year")
 
 
 _data = {}

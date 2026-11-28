@@ -47,13 +47,13 @@ MESSAGES = {
     'bad_page_path': "page_path must look like {prefix}your-event-name/",
     'page_frozen': "The address can't change after the event is published.",
     'bad_title': "title must be 1 to 120 characters",
-    'bad_date': "date must be YYYY-MM-DD",
+    'bad_date': "date must be YYYY-MM-DD between {first_year} and {last_year}",
     'bad_time': "{field} must be HH:MM in quotes, like \"10:00\"",
     'end_needs_start': "end_time needs a start_time",
     'end_before_start': "end_time must be after start_time on the same date",
     'no_such_time': "{field} {time} doesn't happen on {date} in {timezone}, because the clocks change",
     'bad_timezone': "unknown timezone {timezone}",
-    'bad_capacity': "registration.capacity must be a whole number of 1 or more, or null for no limit",
+    'bad_capacity': "registration.capacity must be a whole number from 1 to {limit}, or null for no limit",
     'bad_registration': "registration.enabled must be true or false",
     'bad_feature': "features can only turn on {features}, each true or false",
     'bad_field': "{field} must be {kind} within {limit}",
@@ -79,7 +79,7 @@ MESSAGES = {
     'no_person': "No account has the uid {uid}",
     'bad_role': "role must be one of {roles}",
     'mine_needs_login': "Sign in to see your events",
-    'bad_filter': "status must be one or more of {statuses}, and since must be YYYY-MM-DD",
+    'bad_filter': "status must be one or more of {statuses}, and since must be YYYY-MM-DD between {first_year} and {last_year}",
     'bad_id': "{field} must be a whole number, the id of an event or a file",
     'bad_flag': "{field} must be true or false",
     'storage_down': "File storage isn't answering. Try again in a minute.",
@@ -149,12 +149,18 @@ def _clock(value, field):
         raise EventError('bad_time', field=field)
 
 
+DB_INT_MAX = 2 ** 31 - 1  # the largest value an Integer column holds in MySQL: ids and capacity stay within it
+
+
 def _whole_id(value, field):
-    """A whole number id from a JSON body or a query, or EventError('bad_id')."""
-    if isinstance(value, str) and re.fullmatch(r"[0-9]{1,18}", value):
-        value = int(value)
+    """A whole number id from a JSON body or a query, or EventError('bad_id'). One over DB_INT_MAX is not_found: no
+    row can have it, and the database could not compare it (a JSON number has no size limit)."""
+    if isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
+        value = int(value) if len(value.lstrip("0")) <= 10 else DB_INT_MAX + 1  # never turn a huge string into a number
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise EventError('bad_id', field=field)
+    if value > DB_INT_MAX:
+        raise EventError('not_found', 404)
     return value
 
 
@@ -811,7 +817,7 @@ class Event(db.Model):
     @staticmethod
     def filters(status_text=None, since_text=None):
         """(statuses, since) from ?status=a,b and ?since=YYYY-MM-DD, or EventError('bad_filter')."""
-        bad = EventError('bad_filter', statuses=list(event_rules.statuses()))
+        bad = Event._bad_filter()
         statuses = None
         if status_text is not None:
             statuses = [part.strip() for part in str(status_text).split(",") if part.strip()]
@@ -825,7 +831,14 @@ class Event(db.Model):
                 since = parse_date(since_text, "since")
             except ScheduleError:
                 raise bad
+            if not event_rules.limit('first_year') <= since.year <= event_rules.limit('last_year'):
+                raise bad
         return statuses, since
+
+    @staticmethod
+    def _bad_filter():
+        return EventError('bad_filter', statuses=list(event_rules.statuses()),
+                          first_year=event_rules.limit('first_year'), last_year=event_rules.limit('last_year'))
 
     @staticmethod
     def listing(statuses=None, since=None, managed_by=None):
@@ -842,8 +855,11 @@ class Event(db.Model):
         if statuses:
             query = query.filter(Event._status.in_(statuses))
         if since is not None:
-            midnight = datetime.combine(since, time(0), tzinfo=ZoneInfo(event_rules.default_timezone()))
-            query = query.filter(Event._ends_at >= midnight.astimezone(timezone.utc).replace(tzinfo=None))
+            try:
+                midnight = datetime.combine(since, time(0), tzinfo=ZoneInfo(event_rules.default_timezone())).astimezone(timezone.utc)
+            except OverflowError:  # a first_year of 1 in a zone ahead of UTC
+                raise Event._bad_filter()
+            query = query.filter(Event._ends_at >= midnight.replace(tzinfo=None))
         return query.order_by(Event._starts_at, Event.id).all()
 
     """ Checking what a request sends """
@@ -890,8 +906,8 @@ class Event(db.Model):
             if not isinstance(enabled, bool):
                 raise EventError('bad_registration')
             capacity = registration['capacity'] if 'capacity' in registration else (current.capacity if current is not None else None)
-            if capacity is not None and (isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 1):
-                raise EventError('bad_capacity')
+            if capacity is not None and (isinstance(capacity, bool) or not isinstance(capacity, int) or not 1 <= capacity <= DB_INT_MAX):
+                raise EventError('bad_capacity', limit=DB_INT_MAX)
             values['registration_enabled'], values['capacity'] = enabled, capacity
 
         if creating or 'features' in inputs:
@@ -927,12 +943,16 @@ class Event(db.Model):
     def _schedule(written):
         """{timezone, starts_at, ends_at} from the date and times as written. No start_time means all day, from
         00:00 to the next 00:00; a start with no end runs to the end of that day."""
+        first, last = event_rules.limit('first_year'), event_rules.limit('last_year')
+        bad_date = EventError('bad_date', first_year=first, last_year=last)
         if not isinstance(written['date'], str) or not event_fields.DATE.fullmatch(written['date']):
-            raise EventError('bad_date')
+            raise bad_date
         try:
             day = parse_date(written['date'])
         except ScheduleError:
-            raise EventError('bad_date')
+            raise bad_date
+        if not first <= day.year <= last:
+            raise bad_date
         zone = written['timezone'] if written['timezone'] is not None else event_rules.default_timezone()
         try:
             if not isinstance(zone, str):
@@ -944,11 +964,14 @@ class Event(db.Model):
         end = _clock(written['end_time'], 'end_time') if written['end_time'] is not None else None
         if end is not None and start is None:
             raise EventError('end_needs_start')
-        starts_at = Event._instant(day, start or time(0), zone, 'start_time' if start is not None else None)
-        if end is not None:
-            ends_at = Event._instant(day, end, zone, 'end_time')
-        else:
-            ends_at = Event._instant(day + timedelta(days=1), time(0), zone)
+        try:
+            starts_at = Event._instant(day, start or time(0), zone, 'start_time' if start is not None else None)
+            if end is not None:
+                ends_at = Event._instant(day, end, zone, 'end_time')
+            else:
+                ends_at = Event._instant(day + timedelta(days=1), time(0), zone)
+        except OverflowError:  # a day at the edge of datetime's years, moved across midnight by its zone
+            raise bad_date
         if ends_at <= starts_at:  # as instants: the day the clocks change, 03:00 can come before 02:30
             raise EventError('end_before_start')
         return {'timezone': zone, 'starts_at': starts_at, 'ends_at': ends_at}

@@ -30,5 +30,5 @@
   "video_hosts": ["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "drive.google.com"],
   "check_in_code_seconds": 300,
   "s3_prefix": "flask/events/",
-  "limits": {"text": 200, "description": 500, "body": 20000, "list": 20, "alert_days": 365}
+  "limits": {"text": 200, "description": 500, "body": 20000, "list": 20, "alert_days": 365, "first_year": 2000, "last_year": 2100}
 }

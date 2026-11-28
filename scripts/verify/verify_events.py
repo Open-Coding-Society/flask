@@ -26,7 +26,7 @@ REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
 REAL_FILES = os.path.join(REPO, "instance", "data", "events")
 RULES = os.path.join(REPO, "model", "dataconfigs", "event_rules.json")
 PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run; the accounts live only in the throwaway database
-TOTAL = 52
+TOTAL = 53
 PEOPLE = {"zz_teacher": "Teacher", "zz_admin": "Admin", "zz_alice": "User", "zz_bob": "User",
           "zz_carol": "User", "zz_dave": "User", "zz_guest": "Guest"}
 FUTURE = (date.today() + timedelta(days=400)).isoformat()  # far enough ahead that RSVPs stay open whenever this runs
@@ -1014,6 +1014,46 @@ def main():
             r = spring_forward("all-day", start_time=None, end_time=None)
             check(52, "an all-day event that day lasts 23 hours", r.status_code == 201
                   and event_of(r).get("starts_at") == "2027-03-14T08:00:00.000Z" and event_of(r).get("ends_at") == "2027-03-15T07:00:00.000Z", f"{r.status_code} {body_of(r)}")
+
+        # ---------------------------------------------------------------- numbers too big for the database or the calendar
+        with checking(53):
+            from model import event_rules
+            from model.event import Event
+            first, last = event_rules.limit("first_year"), event_rules.limit("last_year")
+            check(53, "event_rules.json's limits have first_year 2000 and last_year 2100, and GET options sends them",
+                  (first, last) == (2000, 2100) and {k: body_of(anon.get("/api/event/options")).get("limits", {}).get(k) for k in ("first_year", "last_year")}
+                  == {"first_year": 2000, "last_year": 2100}, (first, last))
+            for day in ("1999-12-31", "2101-01-01", "9999-12-31"):
+                r = teacher.post("/api/event", json=mort(f"/events/verify-year-{day[:4]}/", date=day))
+                check(53, f"date {day} is 400 bad_date, which names the years", r.status_code == 400 and code_of(r) == "bad_date"
+                      and body_of(r).get("first_year") == 2000 and body_of(r).get("last_year") == 2100 and "between 2000 and 2100" in body_of(r).get("message", ""),
+                      f"{r.status_code} {body_of(r)}")
+            r = anon.get("/api/event", query_string={"since": "1999-12-31"})
+            check(53, "since before first_year is 400 bad_filter", r.status_code == 400 and code_of(r) == "bad_filter", f"{r.status_code} {body_of(r)}")
+            from model import event as event_model
+            check(53, "the database's integer limit is a named constant, 2**31 - 1", getattr(event_model, "DB_INT_MAX", None) == 2 ** 31 - 1)
+            for capacity in (2 ** 31, 2 ** 64):
+                r = teacher.put("/api/event", json={"id": ids["co"], "registration": {"enabled": True, "capacity": capacity}})
+                check(53, f"capacity {capacity} is 400 bad_capacity", r.status_code == 400 and code_of(r) == "bad_capacity", f"{r.status_code} {body_of(r)}")
+            r = teacher.put("/api/event", json={"id": ids["co"], "registration": {"enabled": True, "capacity": 2 ** 31 - 1}})
+            check(53, "capacity 2**31 - 1 is fine", r.status_code == 200, f"{r.status_code} {body_of(r)}")
+            for label, send in (("?id= of 20 digits", lambda: anon.get("/api/event", query_string={"id": "9" * 20})),
+                                ("?id= of 2**31", lambda: anon.get("/api/event", query_string={"id": str(2 ** 31)})),
+                                ("a body id of 2**64", lambda: teacher.put("/api/event", json={"id": 2 ** 64, "title": "x"})),
+                                ("an event_id of 2**64", lambda: alice.put("/api/event/rsvp", json={"event_id": 2 ** 64})),
+                                ("a file ?id= of 2**64", lambda: anon.get("/api/event/files", query_string={"id": str(2 ** 64)}))):
+                r = send()
+                check(53, f"{label} is 404 not_found", r.status_code == 404 and code_of(r) == "not_found", f"{r.status_code} {body_of(r)}")
+            r = anon.get("/api/event", query_string={"id": "0000000000" + str(ids["e1"])})
+            check(53, "an id with leading zeros is still that id", r.status_code == 200 and event_of(r).get("id") == ids["e1"], f"{r.status_code}")
+            broken = copy.deepcopy(rules)
+            broken["limits"].update(first_year=2101)
+            try:
+                event_rules._check(broken)
+                refused = False
+            except ValueError as error:
+                refused = "first_year" in str(error)
+            check(53, "event_rules.json with first_year after last_year is refused, naming the key", refused)
 
         # ---------------------------------------------------------------- error extras: last, so it reads every answer
         with checking(48):
