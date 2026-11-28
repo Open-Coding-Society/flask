@@ -26,6 +26,7 @@ from datetime import datetime, time, timedelta, timezone
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from flask import current_app
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from werkzeug.utils import secure_filename
@@ -771,14 +772,19 @@ class Event(db.Model):
         return row
 
     def remove_file(self, actor, file_id):
-        """Delete the row and the stored file. This is allowed in every status, archived too, so a manager can always
-        take a bad photo down. If the store does not answer, nothing changes (the API rolls back)."""
+        """Delete the row, then the stored file. This is allowed in every status, archived too, so a manager can
+        always take a bad photo down. The row goes first, so the file stops showing even when the store does not
+        answer; its bytes are then left behind and logged, never an error."""
         self.require_manager(actor)
         row = self._file(file_id)
+        key = row.key
         db.session.delete(row)
-        if row.key:
-            event_storage.STORE.remove(row.key)
         db.session.commit()
+        if key:
+            try:
+                event_storage.STORE.remove(key)
+            except event_storage.EventStorageError as error:
+                current_app.logger.warning("Event Service: removed file %s, but the store kept its bytes: %s", key, error)
         return None
 
     """ Finding events """

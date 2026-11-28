@@ -26,7 +26,7 @@ REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
 REAL_FILES = os.path.join(REPO, "instance", "data", "events")
 RULES = os.path.join(REPO, "model", "dataconfigs", "event_rules.json")
 PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run; the accounts live only in the throwaway database
-TOTAL = 55
+TOTAL = 56
 PEOPLE = {"zz_teacher": "Teacher", "zz_admin": "Admin", "zz_alice": "User", "zz_bob": "User",
           "zz_carol": "User", "zz_dave": "User", "zz_guest": "Guest"}
 FUTURE = (date.today() + timedelta(days=400)).isoformat()  # far enough ahead that RSVPs stay open whenever this runs
@@ -1111,6 +1111,30 @@ def main():
                 check(55, f"{label} in the same group is 409 link_taken", r.status_code == 409 and code_of(r) == "link_taken", f"{r.status_code} {body_of(r)}")
             r = upload(teacher, ids["co"], "gallery", "Recording", link=youtube, group="other-gallery")
             check(55, "while another group can have it (201)", r.status_code == 201, f"{r.status_code} {body_of(r)}")
+
+        # ---------------------------------------------------------------- removing a file while the store is down
+        with checking(56):
+            from model import event_storage as storage
+            from model.event import EventFile
+            disk, fake = storage.STORE, FakeS3()
+            storage.STORE = storage.S3EventFileStore("verify-bucket", client=fake)
+            kept = []
+
+            class Keep(logging.Handler):
+                def emit(self, record):
+                    kept.append(record.getMessage())
+            handlers, app.logger.handlers = app.logger.handlers, [Keep()]  # the warning is on purpose: keep it off the screen
+            try:
+                r = upload(teacher, ids["pa"], "gallery", "flyer.png", PNG, alt="The event flyer")
+                file_id, key = (body_of(r).get("file") or {}).get("id"), (fake.puts[-1]["Key"] if fake.puts else "")
+                fake.fail = True
+                r = teacher.delete("/api/event/files", json={"id": file_id})
+            finally:
+                app.logger.handlers = handlers
+                storage.STORE = disk
+            check(56, "deleting a file while S3 is down is still 204: the row is saved first", r.status_code == 204, f"{r.status_code} {body_of(r)}")
+            check(56, "and the row is gone", file_id and db.session.get(EventFile, file_id) is None)
+            check(56, "and the bytes left behind are logged, with their key", any(key.split("/", 2)[-1] in message for message in kept), kept)
 
         # ---------------------------------------------------------------- error extras: last, so it reads every answer
         with checking(48):
