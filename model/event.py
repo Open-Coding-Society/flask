@@ -51,6 +51,7 @@ MESSAGES = {
     'bad_time': "{field} must be HH:MM in quotes, like \"10:00\"",
     'end_needs_start': "end_time needs a start_time",
     'end_before_start': "end_time must be after start_time on the same date",
+    'no_such_time': "{field} {time} doesn't happen on {date} in {timezone}, because the clocks change",
     'bad_timezone': "unknown timezone {timezone}",
     'bad_capacity': "registration.capacity must be a whole number of 1 or more, or null for no limit",
     'bad_registration': "registration.enabled must be true or false",
@@ -943,13 +944,24 @@ class Event(db.Model):
         end = _clock(written['end_time'], 'end_time') if written['end_time'] is not None else None
         if end is not None and start is None:
             raise EventError('end_needs_start')
-        if start is not None and end is not None and end <= start:
+        starts_at = Event._instant(day, start or time(0), zone, 'start_time' if start is not None else None)
+        if end is not None:
+            ends_at = Event._instant(day, end, zone, 'end_time')
+        else:
+            ends_at = Event._instant(day + timedelta(days=1), time(0), zone)
+        if ends_at <= starts_at:  # as instants: the day the clocks change, 03:00 can come before 02:30
             raise EventError('end_before_start')
-        place = ZoneInfo(zone)
-        begins = datetime.combine(day, start or time(0), tzinfo=place)
-        finishes = datetime.combine(day, end, tzinfo=place) if end is not None else datetime.combine(day + timedelta(days=1), time(0), tzinfo=place)
-        as_utc = lambda moment: moment.astimezone(timezone.utc).replace(tzinfo=None)
-        return {'timezone': zone, 'starts_at': as_utc(begins), 'ends_at': as_utc(finishes)}
+        return {'timezone': zone, 'starts_at': starts_at, 'ends_at': ends_at}
+
+    @staticmethod
+    def _instant(day, clock, zone, field=None):
+        """The naive UTC instant of a wall-clock time on a day in a zone. A time the event names (field) that the
+        clocks skip that day, like 02:30 when daylight time starts, is no_such_time: it would be saved as another time."""
+        local = datetime.combine(day, clock, tzinfo=ZoneInfo(zone))
+        moment = local.astimezone(timezone.utc)
+        if field is not None and moment.astimezone(ZoneInfo(zone)).replace(tzinfo=None) != local.replace(tzinfo=None):
+            raise EventError('no_such_time', field=field, time=clock.strftime("%H:%M"), date=day.isoformat(), timezone=zone)
+        return moment.replace(tzinfo=None)
 
 
 class EventParticipant(db.Model):

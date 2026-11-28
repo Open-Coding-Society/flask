@@ -26,7 +26,7 @@ REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
 REAL_FILES = os.path.join(REPO, "instance", "data", "events")
 RULES = os.path.join(REPO, "model", "dataconfigs", "event_rules.json")
 PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run; the accounts live only in the throwaway database
-TOTAL = 51
+TOTAL = 52
 PEOPLE = {"zz_teacher": "Teacher", "zz_admin": "Admin", "zz_alice": "User", "zz_bob": "User",
           "zz_carol": "User", "zz_dave": "User", "zz_guest": "Guest"}
 FUTURE = (date.today() + timedelta(days=400)).isoformat()  # far enough ahead that RSVPs stay open whenever this runs
@@ -995,6 +995,25 @@ def main():
             r = at_once(lambda: dave.post("/api/event/checkin", json={"event_id": ids["window"], "code": code}))
             check(51, "two check-ins of one person at once: 200, checked in once, on the one row",
                   r.status_code == 200 and body_of(r).get("checked_in_at") and rows() == 1, f"{r.status_code} {body_of(r)} rows={rows()}")
+
+        # ---------------------------------------------------------------- the day the clocks change
+        with checking(52):
+            # On 2027-03-14 Los Angeles moves its clocks from 02:00 straight to 03:00
+            spring_forward = lambda name, **times: teacher.post("/api/event", json=mort(f"/events/verify-dst-{name}/", date="2027-03-14", **times))
+            r = spring_forward("gap", start_time="02:30", end_time="03:00")
+            check(52, "a start_time the clocks skip (02:30) is 400 no_such_time, naming the field, time, date and zone",
+                  r.status_code == 400 and code_of(r) == "no_such_time" and body_of(r).get("field") == "start_time" and body_of(r).get("time") == "02:30"
+                  and body_of(r).get("date") == "2027-03-14" and body_of(r).get("timezone") == "America/Los_Angeles"
+                  and "because the clocks change" in body_of(r).get("message", ""), f"{r.status_code} {body_of(r)}")
+            r = spring_forward("gap-end", start_time="01:00", end_time="02:15")
+            check(52, "an end_time the clocks skip is no_such_time too", r.status_code == 400 and code_of(r) == "no_such_time"
+                  and body_of(r).get("field") == "end_time", f"{r.status_code} {body_of(r)}")
+            r = spring_forward("across", start_time="01:30", end_time="03:00")
+            check(52, "01:30 to 03:00 that day is half an hour: 09:30Z to 10:00Z", r.status_code == 201
+                  and event_of(r).get("starts_at") == "2027-03-14T09:30:00.000Z" and event_of(r).get("ends_at") == "2027-03-14T10:00:00.000Z", f"{r.status_code} {body_of(r)}")
+            r = spring_forward("all-day", start_time=None, end_time=None)
+            check(52, "an all-day event that day lasts 23 hours", r.status_code == 201
+                  and event_of(r).get("starts_at") == "2027-03-14T08:00:00.000Z" and event_of(r).get("ends_at") == "2027-03-15T07:00:00.000Z", f"{r.status_code} {body_of(r)}")
 
         # ---------------------------------------------------------------- error extras: last, so it reads every answer
         with checking(48):
