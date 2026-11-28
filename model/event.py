@@ -339,6 +339,7 @@ class Event(db.Model):
         self._require_open('edit')
         values = Event.validate(inputs, current=self)
         page_path = values.get('page_path', self._page_path)
+        self._lock()  # a capacity that grew moves the waitlist up below, so no RSVP may take a spot in between
         try:
             self._apply(values)
             self._updated_at = utc_now()
@@ -460,6 +461,29 @@ class Event(db.Model):
     def _participant(self, user):
         return None if user is None else self.participants.filter_by(_user_id=user.id).first()
 
+    def _change_participant(self, user, change, rules=None):
+        """Make change(row) to this person's row in the event, adding the row when they have none, and save it. The
+        event is locked first and rules() runs next, so what it reads (the status, the counts) is current. Two
+        requests for one person at once can still both add a row (SQLite locks nothing); the second save then
+        breaks uq_event_participant, so it rolls back and makes its change again, on the row the first one added."""
+        try:
+            return self._change_row(user, change, rules)
+        except IntegrityError:
+            db.session.rollback()
+            return self._change_row(user, change, rules)
+
+    def _change_row(self, user, change, rules):
+        self._lock()
+        if rules is not None:
+            rules()
+        row = self._participant(user)
+        if row is None:
+            row = EventParticipant(self, user)
+            db.session.add(row)
+        change(row)
+        db.session.commit()
+        return row
+
     def _waitlist_position(self, row):
         if row is None or row.rsvp != WAITLIST:
             return None
@@ -489,7 +513,8 @@ class Event(db.Model):
     def _lock(self):
         """End the current transaction and lock this event's row until the next commit, so two RSVPs at once
         (gunicorn runs several workers) cannot both take the last spot. Ending the transaction first means the
-        counts read after the lock see every RSVP already saved."""
+        status and counts read after the lock see every change already saved. Production's MySQL locks the row;
+        SQLite, which only development uses, ignores FOR UPDATE and locks nothing."""
         db.session.commit()
         Event.query.filter_by(id=self.id).with_for_update().first()
 
@@ -509,22 +534,18 @@ class Event(db.Model):
         now = now or utc_now()
         if not self.visible_to(user):
             raise EventError('not_found', 404)
-        self._require_open('rsvp')
-        if not self._takes_registration():
-            raise EventError('registration_off', 409)
-        self._require_before_start(now)
-        self._lock()
-        row = self._participant(user)
-        if row is not None and row.rsvp in (GOING, WAITLIST):
-            db.session.commit()
-            return row
-        if row is None:
-            row = EventParticipant(self, user)
-            db.session.add(row)
-        row.rsvp = GOING if self._capacity is None or self._going() < self._capacity else WAITLIST
-        row.rsvp_at = now
-        db.session.commit()
-        return row
+
+        def rules():  # read after the lock, so a status change or a spot taken by another worker is seen
+            self._require_open('rsvp')
+            if not self._takes_registration():
+                raise EventError('registration_off', 409)
+            self._require_before_start(now)
+
+        def sign_up(row):
+            if row.rsvp not in (GOING, WAITLIST):
+                row.rsvp = GOING if self._capacity is None or self._going() < self._capacity else WAITLIST
+                row.rsvp_at = now
+        return self._change_participant(user, sign_up, rules)
 
     def cancel_rsvp(self, user, now=None):
         """The caller is no longer coming: declined, and the first person waiting moves up. It takes the same window
@@ -576,15 +597,12 @@ class Event(db.Model):
         given = (code.strip().upper() if isinstance(code, str) else "").encode()
         if not self._checkin_secret or not any(hmac.compare_digest(given, self._code(p).encode()) for p in (period, period - 1)):
             raise EventError('bad_code', 400)
-        row = self._participant(user)
-        if row is None:
-            row = EventParticipant(self, user)
-            db.session.add(row)
-        if row.checked_in_at is None:
-            row.checked_in_at = now
-            row.check_in_method = BY_QR
-        db.session.commit()
-        return row
+
+        def arrive(row):
+            if row.checked_in_at is None:
+                row.checked_in_at = now
+                row.check_in_method = BY_QR
+        return self._change_participant(user, arrive)
 
     """ The roster, managed by the organizers """
 
@@ -611,27 +629,27 @@ class Event(db.Model):
             if role not in event_rules.participant_roles():
                 raise EventError('bad_role', roles=list(event_rules.participant_roles()))
         person = Event._person(uid)
-        row = self._participant(person)
-        if row is None:
-            row = EventParticipant(self, person)
-            db.session.add(row)
-        if role is not None:
-            row.role = role
-        if checked_in is True and row.checked_in_at is None:
-            row.checked_in_at = utc_now()
-            row.check_in_method = BY_ORGANIZER
-        elif checked_in is False:
-            row.checked_in_at = None
-            row.check_in_method = None
-        db.session.commit()
-        return row
+
+        def apply(row):
+            if role is not None:
+                row.role = role
+            if checked_in is True and row.checked_in_at is None:
+                row.checked_in_at = utc_now()
+                row.check_in_method = BY_ORGANIZER
+            elif checked_in is False:
+                row.checked_in_at = None
+                row.check_in_method = None
+        return self._change_participant(person, apply)
 
     def remove_participant(self, actor, uid):
         """Take someone out of the event, and move the waitlist up. Removing an organizer is the owner's or staff's."""
         self.require_manager(actor)
         self._require_open('edit')
-        row = self._participant(Event._person(uid))
+        person = Event._person(uid)
+        self._lock()  # the waitlist moves up below, so no RSVP may take the spot in between
+        row = self._participant(person)
         if row is None:
+            db.session.commit()  # ends the lock
             return None
         if event_rules.is_manager_role(row.role) and not self._may_change_roles(actor):
             raise EventError('not_owner', 403)

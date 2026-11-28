@@ -26,7 +26,7 @@ REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
 REAL_FILES = os.path.join(REPO, "instance", "data", "events")
 RULES = os.path.join(REPO, "model", "dataconfigs", "event_rules.json")
 PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run; the accounts live only in the throwaway database
-TOTAL = 49
+TOTAL = 51
 PEOPLE = {"zz_teacher": "Teacher", "zz_admin": "Admin", "zz_alice": "User", "zz_bob": "User",
           "zz_carol": "User", "zz_dave": "User", "zz_guest": "Guest"}
 FUTURE = (date.today() + timedelta(days=400)).isoformat()  # far enough ahead that RSVPs stay open whenever this runs
@@ -919,6 +919,82 @@ def main():
             check(49, "while a manager can still take a photo down (204)", r.status_code == 204, f"{r.status_code} {body_of(r)}")
             r = anon.get("/api/event/files", buffered=True, query_string={"id": ids["png"]})
             check(49, "and it is gone", r.status_code == 404, r.status_code)
+
+        # ---------------------------------------------------------------- two workers at once
+        with checking(50):
+            from sqlalchemy import update
+            from model.event import Event, EventParticipant
+            real_lock, real_promote = Event._lock, Event._promote
+
+            def closed_by_another_worker(event):
+                """Another worker moves the event on just before this one takes the lock."""
+                db.session.execute(update(Event).where(Event.id == event.id).values({Event._status: "active"}))
+                real_lock(event)
+            Event._lock = closed_by_another_worker
+            try:
+                answer = model_error(lambda: db.session.get(Event, ids["window"]).rsvp(person("zz_bob")))
+            finally:
+                Event._lock = real_lock
+                db.session.rollback()
+                db.session.execute(update(Event).where(Event.id == ids["window"]).values({Event._status: "registration"}))
+                db.session.commit()
+            bob_rows = EventParticipant.query.filter_by(_event_id=ids["window"], _user_id=person("zz_bob").id).count()
+            check(50, "an RSVP reads the status after it takes the lock: closed by another worker in between, it is 409 not_open",
+                  answer is not None and answer[0].get("code") == "not_open" and bob_rows == 0, f"{answer} rows={bob_rows}")
+
+            order = []
+
+            def spy(name, real):
+                def wrapped(event):
+                    order.append(name)
+                    return real(event)
+                return wrapped
+            Event._lock, Event._promote = spy("lock", real_lock), spy("promote", real_promote)
+            try:
+                teacher.put("/api/event", json={"id": ids["window"], "registration": {"enabled": True, "capacity": 60}})
+                grew = list(order)
+                teacher.put("/api/event/participants", json={"event_id": ids["window"], "uid": "zz_bob", "role": "attendee"})
+                del order[:]
+                teacher.delete("/api/event/participants", json={"event_id": ids["window"], "uid": "zz_bob"})
+                removed = list(order)
+            finally:
+                Event._lock, Event._promote = real_lock, real_promote
+            check(50, "a capacity change takes the lock before the waitlist moves up", grew == ["lock", "promote"], grew)
+            check(50, "and so does removing someone", removed == ["lock", "promote"], removed)
+
+        with checking(51):
+            from model.event import Event, EventParticipant
+            real_participant = Event._participant
+
+            def misses_once():
+                """_participant as another worker's request sees it: the person's row is not saved yet, the first time."""
+                missed = []
+
+                def find(event, user):
+                    if not missed:
+                        missed.append(True)
+                        return None
+                    return real_participant(event, user)
+                return find
+
+            def at_once(send):
+                Event._participant = misses_once()
+                try:
+                    return send()
+                finally:
+                    Event._participant = real_participant
+            rows = lambda: EventParticipant.query.filter_by(_event_id=ids["window"], _user_id=person("zz_dave").id).count()
+            dave.put("/api/event/rsvp", json={"event_id": ids["window"]})
+            r = at_once(lambda: dave.put("/api/event/rsvp", json={"event_id": ids["window"]}))
+            check(51, "two RSVPs of one person at once: the second is 200 and there is still one row",
+                  r.status_code == 200 and body_of(r).get("rsvp") == "going" and rows() == 1, f"{r.status_code} {body_of(r)} rows={rows()}")
+            r = at_once(lambda: teacher.put("/api/event/participants", json={"event_id": ids["window"], "uid": "zz_dave", "role": "attendee"}))
+            check(51, "an organizer's change to the same person at once is 200, on the one row", r.status_code == 200 and rows() == 1, f"{r.status_code} {body_of(r)} rows={rows()}")
+            status(teacher, ids["window"], "active")
+            code = body_of(teacher.get("/api/event/checkin", query_string={"event_id": ids["window"]})).get("code")
+            r = at_once(lambda: dave.post("/api/event/checkin", json={"event_id": ids["window"], "code": code}))
+            check(51, "two check-ins of one person at once: 200, checked in once, on the one row",
+                  r.status_code == 200 and body_of(r).get("checked_in_at") and rows() == 1, f"{r.status_code} {body_of(r)} rows={rows()}")
 
         # ---------------------------------------------------------------- error extras: last, so it reads every answer
         with checking(48):
