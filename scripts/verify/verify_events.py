@@ -26,7 +26,7 @@ REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
 REAL_FILES = os.path.join(REPO, "instance", "data", "events")
 RULES = os.path.join(REPO, "model", "dataconfigs", "event_rules.json")
 PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run; the accounts live only in the throwaway database
-TOTAL = 56
+TOTAL = 57
 PEOPLE = {"zz_teacher": "Teacher", "zz_admin": "Admin", "zz_alice": "User", "zz_bob": "User",
           "zz_carol": "User", "zz_dave": "User", "zz_guest": "Guest"}
 FUTURE = (date.today() + timedelta(days=400)).isoformat()  # far enough ahead that RSVPs stay open whenever this runs
@@ -1135,6 +1135,16 @@ def main():
             check(56, "deleting a file while S3 is down is still 204: the row is saved first", r.status_code == 204, f"{r.status_code} {body_of(r)}")
             check(56, "and the row is gone", file_id and db.session.get(EventFile, file_id) is None)
             check(56, "and the bytes left behind are logged, with their key", any(key.split("/", 2)[-1] in message for message in kept), kept)
+
+        # ---------------------------------------------------------------- since and an all-day event
+        with checking(57):
+            r = teacher.post("/api/event", json=mort("/events/verify-all-day/", start_time=None, end_time=None))
+            ids["all_day"] = event_of(r).get("id")
+            status(teacher, ids["all_day"], "published")
+            listed = lambda day: ids["all_day"] in [e.get("id") for e in body_of(anon.get("/api/event", query_string={"since": day})).get("events", [])]
+            next_day = (date.fromisoformat(FUTURE) + timedelta(days=1)).isoformat()
+            check(57, "an all-day event is listed since its own date", ids["all_day"] and listed(FUTURE))
+            check(57, "but not since the next day, at whose midnight it ends", not listed(next_day))
 
         # ---------------------------------------------------------------- error extras: last, so it reads every answer
         with checking(48):

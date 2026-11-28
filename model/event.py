@@ -856,7 +856,7 @@ class Event(db.Model):
     @staticmethod
     def listing(statuses=None, since=None, managed_by=None):
         """Events by start: every event that is not private, or (managed_by) the ones the caller manages, drafts
-        included. since keeps the events that end on or after that date's midnight in default_timezone."""
+        included. since keeps the events that end after that date's midnight in default_timezone."""
         query = Event.query
         if managed_by is None:
             query = query.filter(Event._status.in_([s for s in event_rules.statuses() if not event_rules.is_private(s)]))
@@ -872,7 +872,8 @@ class Event(db.Model):
                 midnight = datetime.combine(since, time(0), tzinfo=ZoneInfo(event_rules.default_timezone())).astimezone(timezone.utc)
             except OverflowError:  # a first_year of 1 in a zone ahead of UTC
                 raise Event._bad_filter()
-            query = query.filter(Event._ends_at >= midnight.replace(tzinfo=None))
+            # after, not at: an all-day event the day before ends exactly at this midnight
+            query = query.filter(Event._ends_at > midnight.replace(tzinfo=None))
         return query.order_by(Event._starts_at, Event.id).all()
 
     """ Checking what a request sends """
