@@ -15,7 +15,7 @@ decorators, and the role list the running app holds). rbac_prober.py says what e
   python scripts/rbac/rbac_reconcile.py --out report.json     # the full comparison, one record per method and route
   python scripts/rbac/rbac_reconcile.py --inventory a.json --probe c.json    # reports made earlier
   python scripts/rbac/rbac_reconcile.py --sample              # also check against scripts/rbac/rbac_sample_labels.py
-  python scripts/rbac/rbac_reconcile.py --draft-policy permissions.json --owner NAME --review-by 2027-01-31
+  python scripts/rbac/rbac_reconcile.py --draft-policy permissions.json --owner NAME
                                                          # a first model/dataconfigs/permissions.json to finish by hand
 
 The full record shows which routes are open, so write it outside the repo and do not commit or post it.
@@ -193,7 +193,7 @@ def check_sample(records, sample):
     return problems
 
 
-def draft_policy(records, owner, review_by):
+def draft_policy(records, owner):
     """A first permissions.json from the guards as they are today, for a person to finish.
 
     Every route says who its guard lets through in production. A route with no guard goes under legacy_open,
@@ -216,7 +216,7 @@ def draft_policy(records, owner, review_by):
         if who != "anyone" and who_may_call(record, "development") == "anyone":
             policy["open_in_development"].append(request)
     if unsorted:
-        policy["legacy_open"].append({"owner": owner, "review_by": review_by, "requests": unsorted})
+        policy["legacy_open"].append({"owner": owner, "requests": unsorted})
     policy["roles"] = dict(sorted(policy["roles"].items()))
     return policy
 
@@ -280,7 +280,6 @@ def main_cli():
     parser.add_argument("--out", help="write the full comparison here (JSON), outside the repo")
     parser.add_argument("--draft-policy", metavar="FILE", help="write a first permissions.json from today's guards, for a person to finish")
     parser.add_argument("--owner", default="", help="with --draft-policy: who owns the review of the routes that are open today")
-    parser.add_argument("--review-by", default="", help="with --draft-policy: the date that review is due, YYYY-MM-DD")
     parser.add_argument("--sample", action="store_true", help="check the reading against the routes labelled by hand in rbac_sample_labels.py")
     args = parser.parse_args()
     if bool(args.inventory) != bool(args.probe):
@@ -304,10 +303,10 @@ def main_cli():
             print("  " + problem)
         failed = bool(problems)
     if args.draft_policy:
-        if not args.owner or not args.review_by:
-            parser.error("--draft-policy needs --owner and --review-by")
+        if not args.owner:
+            parser.error("--draft-policy needs --owner")
         with open(args.draft_policy, "w", encoding="utf-8") as fh:
-            json.dump(draft_policy(records, args.owner, args.review_by), fh, indent=2)
+            json.dump(draft_policy(records, args.owner), fh, indent=2)
             fh.write("\n")
         print(f"wrote a draft policy to {args.draft_policy}")
     if args.out:

@@ -106,11 +106,19 @@ Every request is in exactly one of these lists. **A request in none of them is o
 |---|---|
 | `public` | Anyone, with or without an account, on purpose: the home page, login, sign-up. |
 | `public_restricted` | Anyone, on purpose, but the route runs code or spends a provider's credit. Nothing goes here until it has been reviewed to run in a sandbox and under a rate limit. Empty today. |
-| `legacy_open` | Anyone, because it has always been so and nobody has yet decided that it should be. Groups of requests, each with an `owner` and a `review_by` date. The aim is for this list to get shorter: each request moves to `public`, or to a list that needs an account. |
+| `legacy_open` | Anyone, because it has always been so and nobody has yet decided that it should be. Groups of requests, each with an `owner`. The aim is for this list to get shorter: each request moves to `public`, or to a list that needs an account. |
 | `device_key` | A device that sends the device key. The route checks the key. |
 | `session` | A page behind the Flask session login. |
 | `signed_in` | Any active account. |
 | `roles` | For each role, the requests only some roles may make. A request for Teachers and Admins is in both lists. |
+
+**What is still in `legacy_open`:** the NPC game's five requests (`/api/ainpc/...`), which the game builder needs for
+visitors with no account, and `POST /api/feedback/`, which the feedback form allows from "Anonymous". Both spend
+something (a provider's credit, a GitHub issue), so they move to `public_restricted` once they have a rate limit.
+Everything else that was here has been sorted into `public`, `signed_in` or `roles`.
+
+A rule about whose record a route may touch is not in this file. `GET /api/feedback/user/<uid>` is `signed_in`, and
+the route itself returns 403 unless the account is that uid or an Admin.
 
 `open_in_development` is not a list of its own kind: it names requests that are open while `IS_PRODUCTION`
 is not true. Each must also be in `signed_in` or `roles`, which says who may make it in production.
@@ -136,7 +144,7 @@ In shadow mode a mistake in the check is logged and the request goes on, so the 
 request fails.
 
 The loader refuses a request that is in two lists, a role that `account_types.json` does not have, an entry
-that is not `"METHOD /route"`, and a `legacy_open` group with no owner or date.
+that is not `"METHOD /route"`, and a `legacy_open` group with no owner.
 
 `python scripts/verify/verify_permissions.py` is the check to run whenever a route is added or changed. It fails when:
 
@@ -145,14 +153,15 @@ that is not `"METHOD /route"`, and a `legacy_open` group with no owner or date.
   names every caller the file may hold a route tighter than its guard does (that is how a route is closed from
   data); it may never be looser;
 - a request not listed as open answers a caller with no account, when really called;
-- a `legacy_open` group is past its `review_by` date.
 
 It calls the routes on a throwaway copy of the app with no network and no provider keys
 (`scripts/rbac/rbac_prober.py`), so it is safe to run anywhere.
 
 `python scripts/verify/verify_access.py` is the check to run before adding a caller to `enforce`. It calls every
 route as every kind of caller, in development and production mode, once in shadow mode and once enforced
-for everyone, and fails if any answer differs. It takes about four minutes.
+for everyone, and fails if any answer differs, except for the requests the file holds tighter than their guard on
+purpose (`HELD_TIGHTER` in the script): those may change only to a 401 or 403 from the check, and the list must be exact.
+It takes about four minutes.
 
 ## What the sign-up page is told
 
@@ -179,6 +188,7 @@ never ends up with nothing to choose.
    `python scripts/verify/verify_activation.py`,
    `python scripts/verify/verify_dataconfigs.py` (that these files are here and explained),
    `python scripts/verify/verify_permissions.py` (that `permissions.json` matches the routes),
+   `python scripts/verify/verify_feedback_access.py` (who may read feedback),
    `python scripts/verify/verify_access.py` (that enforcing `permissions.json` changes no answer). Set
    `DEFAULT_PASSWORD`, `ADMIN_PASSWORD`, `TEACHER_PASSWORD`, `USER_PASSWORD` and `MY_PASSWORD` to
    passwords that follow the password rule if your `.env` has weak ones.
