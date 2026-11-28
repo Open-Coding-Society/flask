@@ -101,14 +101,17 @@ KIND_WORDS = {
 
 class EventError(Exception):
     """A request the rules refuse. response() is ({message, code, ...}, http_status): code is the MESSAGES key, and
-    the fields used in the message travel with it (id on page_taken is the event's id, allowed on transition the
-    list). The HTTP status is http_status, because transition and back_to_draft have a status field of their own."""
+    the fields travel with it as ids and numbers a page can word (id on page_taken is the event's id, allowed on
+    transition the list). words fill in the message only, where its English differs from the id (not_open says
+    "RSVPs" and sends action "rsvp"). The HTTP status is http_status, because transition and back_to_draft have a
+    status field of their own."""
 
-    def __init__(self, message_id, http_status=400, **fields):
+    def __init__(self, message_id, http_status=400, words=None, **fields):
         self.message_id = message_id
         self.http_status = http_status
         self.fields = fields
-        self.message = MESSAGES[message_id].format(**{key: _words(value) for key, value in fields.items()})
+        filled = {**fields, **(words or {})}
+        self.message = MESSAGES[message_id].format(**{key: _words(value) for key, value in filled.items()})
         super().__init__(self.message)
 
     def response(self):
@@ -159,14 +162,32 @@ def _length(model, column):
     return model.__table__.c[column].type.length
 
 
-def _limit_words(kind, limit):
+LIST_KINDS = ('text_list', 'text_map', 'map_list')  # their bad_field also says how many items
+
+
+def _limit_words(kind, limit=None, items=None, keys=None):
+    """A kind's limit in words, for bad_field's message."""
+    if kind == 'object':
+        return "the keys " + ", ".join(keys)
+    if kind == 'id':
+        return "one number"
     if kind in ('text_list', 'text_map'):
-        return f"{event_rules.limit('list')} items of up to {event_rules.limit(limit)} characters"
+        return f"{items} items of up to {limit} characters"
     if kind == 'map_list':
-        return f"{event_rules.limit('list')} items"
+        return f"{items} items"
     if kind == 'days':
-        return f"{event_rules.limit(limit)} days"
-    return f"{event_rules.limit(limit):,} characters"
+        return f"{limit} days"
+    return f"{limit:,} characters"
+
+
+def _bad_field(field, kind, limit=None, items=None, keys=None):
+    """bad_field for one field. The answer carries ids and numbers a page can word: kind (a KIND_WORDS id), limit
+    (null when the kind has none), items for a list and keys for an object. The message says the same in words."""
+    extra = {'items': items} if items is not None else {}
+    if keys is not None:
+        extra['keys'] = list(keys)
+    return EventError('bad_field', field=field, kind=kind, limit=limit, **extra,
+                      words={'kind': KIND_WORDS[kind], 'limit': _limit_words(kind, limit, items, keys)})
 
 
 def _clean(field, kind, value):
@@ -174,12 +195,15 @@ def _clean(field, kind, value):
     object are dropped, as unknown keys of the definition are."""
     if isinstance(kind, dict):
         if not isinstance(value, dict):
-            raise EventError('bad_field', field=field, kind=KIND_WORDS['object'], limit="the keys " + ", ".join(kind))
+            raise _bad_field(field, 'object', keys=kind)
         return {key: _clean(f"{field}.{key}", sub, value[key]) for key, sub in kind.items() if value.get(key) is not None}
     name, limit = kind
-    bad = EventError('bad_field', field=field, kind=KIND_WORDS[name], limit=_limit_words(name, limit if isinstance(limit, str) else 'text'))
+    if name not in KIND_WORDS:
+        raise ValueError(f"DEFINITION_FIELDS: {field} has a kind the service does not know: {name}")
+    size = event_rules.limit(limit) if isinstance(limit, str) else None  # a map_list's limit is its entries' kinds
+    bad = _bad_field(field, name, size, event_rules.limit('list') if name in LIST_KINDS else None)
     if name in ('text', 'name', 'link', 'markdown'):
-        if not isinstance(value, str) or len(value) > event_rules.limit(limit):
+        if not isinstance(value, str) or len(value) > size:
             raise bad
         if name == 'name' and not value.strip():
             raise bad
@@ -187,19 +211,18 @@ def _clean(field, kind, value):
             raise bad
         return value
     if name == 'days':
-        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= event_rules.limit(limit):
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= size:
             raise bad
         return value
     if name == 'text_list':
         if not isinstance(value, list) or len(value) > event_rules.limit('list'):
             raise bad
-        if not all(isinstance(item, str) and len(item) <= event_rules.limit(limit) for item in value):
+        if not all(isinstance(item, str) and len(item) <= size for item in value):
             raise bad
         return list(value)
     if name == 'text_map':
         if not isinstance(value, dict) or len(value) > event_rules.limit('list'):
             raise bad
-        size = event_rules.limit(limit)
         if not all(isinstance(k, str) and k.strip() and len(k) <= size and isinstance(v, str) and len(v) <= size for k, v in value.items()):
             raise bad
         return dict(value)
@@ -207,7 +230,7 @@ def _clean(field, kind, value):
         if not isinstance(value, list) or len(value) > event_rules.limit('list') or not all(isinstance(item, dict) for item in value):
             raise bad
         return [_clean(field, limit, item) for item in value]
-    raise ValueError(f"DEFINITION_FIELDS: {field} has a kind the service does not know: {name}")
+    raise ValueError(f"DEFINITION_FIELDS: {field} has a kind that is not for a definition field: {name}")
 
 
 def _clock(value, field):
@@ -462,7 +485,7 @@ class Event(db.Model):
 
     def _require_open(self, action):
         if not event_rules.open_for(action, self._status):
-            raise EventError('not_open', 409, action=ACTION_WORDS[action])
+            raise EventError('not_open', 409, action=action, words={'action': ACTION_WORDS[action]})
 
     def _takes_registration(self):
         return bool(self._registration_enabled) and self.features[REGISTRATION]
@@ -758,7 +781,7 @@ class Event(db.Model):
         filename = f"{stem}.{extension}"  # a safe name, up to 255 characters, that keeps its type
         data = Event._decode(content)
         if len(data) > rule['max_bytes']:
-            raise EventError('too_big', 413, size=_size_words(rule['max_bytes']))
+            raise EventError('too_big', 413, max_bytes=rule['max_bytes'], words={'size': _size_words(rule['max_bytes'])})
         check = SIGNATURES.get(extension)
         if check is None or not check(data):
             raise EventError('bad_content')
@@ -806,7 +829,7 @@ class Event(db.Model):
             raise bad
         title = name.strip() if isinstance(name, str) else ""
         if not title or len(title) > event_rules.limit('text'):
-            raise EventError('bad_field', field='name', kind=KIND_WORDS['name'], limit=_limit_words('name', 'text'))
+            raise _bad_field('name', 'name', event_rules.limit('text'))
         row = EventFile(self, group=group, kind=kind, name=title, uploader_uid=actor.uid, link=link)
         db.session.add(row)
         db.session.commit()
@@ -985,7 +1008,7 @@ class Event(db.Model):
         if 'calendar_item_id' in inputs:
             item = inputs['calendar_item_id']
             if item is not None and (isinstance(item, bool) or not isinstance(item, int) or item < 1):
-                raise EventError('bad_field', field='calendar_item_id', kind=KIND_WORDS['id'], limit="one number")
+                raise _bad_field('calendar_item_id', 'id')
             data['calendar_item_id'] = item
         values['data'] = data
         return values

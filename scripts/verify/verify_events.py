@@ -26,7 +26,7 @@ REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
 REAL_FILES = os.path.join(REPO, "instance", "data", "events")
 RULES = os.path.join(REPO, "model", "dataconfigs", "event_rules.json")
 PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run; the accounts live only in the throwaway database
-TOTAL = 47
+TOTAL = 48
 PEOPLE = {"zz_teacher": "Teacher", "zz_admin": "Admin", "zz_alice": "User", "zz_bob": "User",
           "zz_carol": "User", "zz_dave": "User", "zz_guest": "Guest"}
 FUTURE = (date.today() + timedelta(days=400)).isoformat()  # far enough ahead that RSVPs stay open whenever this runs
@@ -862,6 +862,38 @@ def main():
             with open(os.path.join(REPO, "model", "event.py"), encoding="utf-8") as fh:
                 reaches = [line.strip() for line in fh if sets_another_rows_column(line)]
             check(47, "Event changes another class's row only through its property setters", not reaches, reaches[:4])
+
+        # ---------------------------------------------------------------- error extras: last, so it reads every answer
+        with checking(48):
+            from model import event_rules
+            from model.event import MESSAGES
+            r = alice.put("/api/event/rsvp", json={"event_id": ids["noreg"]})
+            check(48, "not_open names the action by its open_for key (rsvp); the message keeps the words",
+                  r.status_code == 409 and code_of(r) == "not_open" and body_of(r).get("action") == "rsvp" and "RSVPs" in body_of(r).get("message", ""), body_of(r))
+            text, items = event_rules.limit("text"), event_rules.limit("list")
+            cases = [({"categories": "Community"}, {"field": "categories", "kind": "text_list", "limit": text, "items": items}),
+                     ({"description": "d" * 501}, {"field": "description", "kind": "text", "limit": event_rules.limit("description")}),
+                     ({"alert_days": 400}, {"field": "alert_days", "kind": "days", "limit": event_rules.limit("alert_days")}),
+                     ({"location": "Room 12"}, {"field": "location", "kind": "object", "limit": None, "keys": ["name", "address", "url"]})]
+            for change, want in cases:
+                body = mort("/events/verify-extras/")
+                body.update(change)
+                r = teacher.post("/api/event", json=body)
+                extras = {key: value for key, value in body_of(r).items() if key not in ("message", "code")}
+                check(48, f"bad_field for {want['field']} carries its kind id and its limit as a number",
+                      r.status_code == 400 and code_of(r) == "bad_field" and extras == want, extras)
+            too_big = next((b for _, _, b in ANSWERS if isinstance(b, dict) and b.get("code") == "too_big"), {})
+            check(48, "too_big carries max_bytes, a number", too_big.get("max_bytes") == event_rules.file_kind("document")["max_bytes"]
+                  and "size" not in too_big, too_big)
+
+            def is_id(value):
+                if isinstance(value, list):
+                    return all(is_id(item) for item in value)
+                return value is None or (isinstance(value, int) and not isinstance(value, bool)) or (isinstance(value, str) and re.fullmatch(r"\S+", value) is not None)
+            english = [(path, b.get("code"), key, value) for path, status_code, b in ANSWERS
+                       if status_code >= 400 and isinstance(b, dict) and b.get("code") in MESSAGES
+                       for key, value in b.items() if key not in ("message", "code") and not is_id(value)]
+            check(48, f"every extra field of the {len(ANSWERS)} answers this run is an id or a number, never English", not english, english[:4])
 
     with app.app_context():
         db.session.remove()
