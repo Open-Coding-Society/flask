@@ -26,7 +26,7 @@ REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
 REAL_FILES = os.path.join(REPO, "instance", "data", "events")
 RULES = os.path.join(REPO, "model", "dataconfigs", "event_rules.json")
 PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run; the accounts live only in the throwaway database
-TOTAL = 61
+TOTAL = 65
 PEOPLE = {"zz_teacher": "Teacher", "zz_admin": "Admin", "zz_alice": "User", "zz_bob": "User",
           "zz_carol": "User", "zz_dave": "User", "zz_guest": "Guest"}
 FUTURE = (date.today() + timedelta(days=400)).isoformat()  # far enough ahead that RSVPs stay open whenever this runs
@@ -1211,6 +1211,69 @@ def main():
             check(61, "and its counts are the single read's", all(e.get("counts") == single[e["id"]].get("counts") for e in many),
                   [(e["id"], e.get("counts"), single[e["id"]].get("counts")) for e in many if e.get("counts") != single[e["id"]].get("counts")][:2])
             check(61, "while a single read still has its files", "files" in single[ids["e1"]] and "body" in single[ids["e1"]])
+
+        # ---------------------------------------------------------------- an attendee is not a manager
+        with checking(62):
+            r = teacher.put("/api/event/participants", json={"event_id": ids["pa"], "uid": "zz_alice", "role": "attendee"})
+            check(62, "alice is an attendee of the published event", r.status_code == 200 and (body_of(r).get("participant") or {}).get("role") == "attendee", body_of(r))
+            pa = ids["pa"]
+            for label, send in (("GET /api/event/participants", lambda: alice.get("/api/event/participants", query_string={"event_id": pa})),
+                                ("PUT /api/event", lambda: alice.put("/api/event", json={"id": pa, "notice": "Changed by alice"})),
+                                ("DELETE /api/event", lambda: alice.delete("/api/event", json={"id": pa})),
+                                ("PUT /api/event/participants", lambda: alice.put("/api/event/participants", json={"event_id": pa, "uid": "zz_bob", "role": "attendee"})),
+                                ("DELETE /api/event/participants", lambda: alice.delete("/api/event/participants", json={"event_id": pa, "uid": "zz_bob"})),
+                                ("POST /api/event/files", lambda: upload(alice, pa, "document", "notes.pdf", PDF, group="workshop-agenda")),
+                                ("GET /api/event/checkin", lambda: alice.get("/api/event/checkin", query_string={"event_id": pa}))):
+                r = send()
+                check(62, f"{label} is 403 not_manager for her", r.status_code == 403 and code_of(r) == "not_manager", f"{r.status_code} {body_of(r)}")
+
+        # ---------------------------------------------------------------- ?mine=true for someone who is not staff
+        with checking(63):
+            mine = lambda client: [e.get("id") for e in body_of(client.get("/api/event", query_string={"mine": "true"})).get("events", [])]
+            check(63, "alice's ?mine=true lists only the event she organizes, the draft included", mine(alice) == [ids["co"]], mine(alice))
+            check(63, "and bob, who organizes none, sees none", mine(bob) == [], mine(bob))
+
+        # ---------------------------------------------------------------- the waitlist at capacity 1
+        with checking(64):
+            ids["wait"] = event_of(teacher.post("/api/event", json=workshop_event("/events/verify-waitlist/", registration={"enabled": True, "capacity": 1}))).get("id")
+            status(teacher, ids["wait"], "published")
+            status(teacher, ids["wait"], "registration")
+            rsvp = lambda client: body_of(client.put("/api/event/rsvp", json={"event_id": ids["wait"]})).get("rsvp")
+            viewer = lambda client: body_of(client.get("/api/event", query_string={"id": ids["wait"]})).get("viewer") or {}
+            answers = [rsvp(alice), rsvp(bob), rsvp(dave)]
+            check(64, "with capacity 1, alice is going and bob, then dave, wait", answers == ["going", "waitlist", "waitlist"], answers)
+            check(64, "bob is first in line and dave second", (viewer(bob).get("waitlist_position"), viewer(dave).get("waitlist_position")) == (1, 2),
+                  (viewer(bob).get("waitlist_position"), viewer(dave).get("waitlist_position")))
+            alice.delete("/api/event/rsvp", json={"event_id": ids["wait"]})
+            check(64, "when alice cancels, bob moves up (first in, first out) and dave is now first in line",
+                  viewer(bob).get("rsvp") == "going" and viewer(dave).get("rsvp") == "waitlist" and viewer(dave).get("waitlist_position") == 1,
+                  (viewer(bob).get("rsvp"), viewer(dave)))
+            r = teacher.delete("/api/event/participants", json={"event_id": ids["wait"], "uid": "zz_bob"})
+            check(64, "removing bob (DELETE participants) moves dave up", r.status_code == 204 and viewer(dave).get("rsvp") == "going", f"{r.status_code} {viewer(dave)}")
+            check(64, "alice RSVPs again and waits", rsvp(alice) == "waitlist")
+            r = teacher.put("/api/event", json={"id": ids["wait"], "registration": {"enabled": True, "capacity": 2}})
+            check(64, "raising the capacity to 2 moves her up", r.status_code == 200 and viewer(alice).get("rsvp") == "going", f"{r.status_code} {viewer(alice)}")
+            status(teacher, ids["wait"], "published")
+            r = status(teacher, ids["wait"], "draft")
+            check(64, "published back to draft with people going is 409 back_to_draft", r.status_code == 409 and code_of(r) == "back_to_draft", f"{r.status_code} {body_of(r)}")
+            for uid in ("zz_alice", "zz_bob"):
+                teacher.put("/api/event/participants", json={"event_id": ids["wait"], "uid": uid, "role": "organizer"})
+            r = alice.delete("/api/event/participants", json={"event_id": ids["wait"], "uid": "zz_bob"})
+            check(64, "alice, an organizer, removing bob, another organizer, is 403 not_owner", r.status_code == 403 and code_of(r) == "not_owner", f"{r.status_code} {body_of(r)}")
+            ids["filed"] = event_of(teacher.post("/api/event", json=workshop_event("/events/verify-draft-with-file/"))).get("id")
+            r = upload(teacher, ids["filed"], "document", "agenda.pdf", PDF, group="workshop-agenda")
+            r = teacher.delete("/api/event", json={"id": ids["filed"]}) if r.status_code == 201 else r
+            check(64, "deleting a draft that has a file is 409 delete_live", r.status_code == 409 and code_of(r) == "delete_live", f"{r.status_code} {body_of(r)}")
+
+        # ---------------------------------------------------------------- every signature
+        with checking(65):
+            from model import event_fields, event_rules
+            for extension in event_fields.SIGNATURES:
+                kind = next((k for k in event_rules.kinds() if extension in event_rules.file_kind(k)["extensions"]), None)
+                wrong = PNG if extension == "pdf" else PDF  # the bytes of another type
+                r = upload(teacher, ids["pa"], kind, f"wrong.{extension}", wrong, alt="Not what its name says") if kind else None
+                check(65, f"a .{extension} file whose bytes are another type is 400 bad_content", r is not None and r.status_code == 400
+                      and code_of(r) == "bad_content", f"kind={kind} {r.status_code if r else ''} {body_of(r) if r else ''}")
 
         # ---------------------------------------------------------------- error extras: last, so it reads every answer
         with checking(48):
