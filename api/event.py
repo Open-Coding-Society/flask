@@ -185,8 +185,7 @@ class EventAPI:
         @token_required()
         def get(self):
             event = Event.find(request.args.get('event_id'), g.current_user, field='event_id')
-            event.require_manager(g.current_user)
-            code, seconds_left = event.check_in_code()
+            code, seconds_left = event.check_in_code(g.current_user)
             return {'code': code, 'seconds_left': seconds_left, 'code_seconds': event_rules.code_seconds()}
 
         @token_required()
@@ -200,8 +199,7 @@ class EventAPI:
         @token_required()
         def get(self):  # ?event_id=
             event = Event.find(request.args.get('event_id'), g.current_user, field='event_id')
-            event.require_manager(g.current_user)
-            return {'participants': [row.read() for row in event.roster()], 'counts': event.counts()}
+            return {'participants': [row.read() for row in event.roster(g.current_user)], 'counts': event.counts()}
 
         @token_required()
         def put(self):  # {event_id, uid, checked_in?, role?}: check someone in by name, or give them a role

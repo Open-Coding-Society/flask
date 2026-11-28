@@ -518,8 +518,9 @@ class Event(db.Model):
             'spots_left': None if self._capacity is None else max(self._capacity - going, 0),
         }
 
-    def roster(self):
-        """Everyone in the event, by when they signed up (walk-ins last), then by name."""
+    def roster(self, actor):
+        """Everyone in the event, by when they signed up (walk-ins last), then by name. Only its managers see it."""
+        self.require_manager(actor)
         rows = self.participants.all()
         return sorted(rows, key=lambda row: (row.rsvp_at is None, row.rsvp_at or datetime.min, (row.user.name or "").lower()))
 
@@ -590,8 +591,9 @@ class Event(db.Model):
         digest = hmac.new(self._checkin_secret.encode(), f"{self.id}:{period}".encode(), hashlib.sha256).digest()
         return base64.b32encode(digest).decode()[:8]
 
-    def check_in_code(self, now=None):
-        """(code, seconds_left) for the organizer's screen."""
+    def check_in_code(self, actor, now=None):
+        """(code, seconds_left) for the organizer's screen. Only its managers get it."""
+        self.require_manager(actor)
         self._require_check_in()
         if not self._checkin_secret:  # an event that entered check-in before the secret existed, or restored without it
             self._checkin_secret = secrets.token_hex(32)

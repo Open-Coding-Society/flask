@@ -26,7 +26,7 @@ REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
 REAL_FILES = os.path.join(REPO, "instance", "data", "events")
 RULES = os.path.join(REPO, "model", "dataconfigs", "event_rules.json")
 PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run; the accounts live only in the throwaway database
-TOTAL = 57
+TOTAL = 58
 PEOPLE = {"zz_teacher": "Teacher", "zz_admin": "Admin", "zz_alice": "User", "zz_bob": "User",
           "zz_carol": "User", "zz_dave": "User", "zz_guest": "Guest"}
 FUTURE = (date.today() + timedelta(days=400)).isoformat()  # far enough ahead that RSVPs stay open whenever this runs
@@ -490,10 +490,10 @@ def main():
             r = carol.post("/api/event/checkin", json={"event_id": ids["e1"], "code": "AAAAAAAA"})
             check(18, "a wrong code is 400", r.status_code == 400 and code_of(r) == "bad_code", f"{r.status_code} {body_of(r)}")
             e1, now, seconds = db.session.get(Event, ids["e1"]), utc_now(), event_rules.code_seconds()
-            old, _ = e1.check_in_code(now=now - timedelta(seconds=2 * seconds))
+            old, _ = e1.check_in_code(person("zz_teacher"), now=now - timedelta(seconds=2 * seconds))
             answer = model_error(lambda: e1.check_in(person("zz_carol"), old, now=now))
             check(18, "a code from two periods ago is 400", answer is not None and answer[0].get("code") == "bad_code" and answer[1] == 400, answer)
-            previous, _ = e1.check_in_code(now=now - timedelta(seconds=seconds))
+            previous, _ = e1.check_in_code(person("zz_teacher"), now=now - timedelta(seconds=seconds))
             participant = e1.check_in(person("zz_carol"), previous, now=now)
             check(18, "the previous period's code still works, for carol", participant.checked_in_at is not None and participant.check_in_method == "qr")
 
@@ -1145,6 +1145,18 @@ def main():
             next_day = (date.fromisoformat(FUTURE) + timedelta(days=1)).isoformat()
             check(57, "an all-day event is listed since its own date", ids["all_day"] and listed(FUTURE))
             check(57, "but not since the next day, at whose midnight it ends", not listed(next_day))
+
+        # ---------------------------------------------------------------- the model checks the manager
+        with checking(58):
+            from model.event import Event
+            window = db.session.get(Event, ids["window"])  # active since check 51; alice is going, not a manager
+            for name in ("check_in_code", "roster"):
+                answer = model_error(lambda: getattr(window, name)(person("zz_alice")))
+                check(58, f"Event.{name}(alice) is 403 not_manager from the model itself", answer is not None
+                      and answer[0].get("code") == "not_manager" and answer[1] == 403, answer)
+                check(58, f"and Event.{name}(the teacher) answers", model_error(lambda: getattr(window, name)(person("zz_teacher"))) is None)
+            with open(os.path.join(REPO, "api", "event.py"), encoding="utf-8") as fh:
+                check(58, "api/event.py leaves every manager check to the model", "require_manager" not in fh.read())
 
         # ---------------------------------------------------------------- error extras: last, so it reads every answer
         with checking(48):
