@@ -178,8 +178,9 @@ def initial_status():
 
 
 def is_private(status):
-    """Whether only the event's managers can see an event in this status."""
-    return status in _data["private_statuses"]
+    """Whether only the event's managers can see an event in this status. A status the file does not list (a row
+    left by an older file, say) is private too, so an event never shows to everyone by mistake."""
+    return status in _data["private_statuses"] or status not in _data["statuses"]
 
 
 def next_statuses(status):

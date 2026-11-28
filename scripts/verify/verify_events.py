@@ -26,7 +26,7 @@ REAL_DB = os.path.join(REPO, "instance", "volumes", "user_management.db")
 REAL_FILES = os.path.join(REPO, "instance", "data", "events")
 RULES = os.path.join(REPO, "model", "dataconfigs", "event_rules.json")
 PASSWORD = "Aa1!" + secrets.token_urlsafe(16)  # new every run; the accounts live only in the throwaway database
-TOTAL = 54
+TOTAL = 55
 PEOPLE = {"zz_teacher": "Teacher", "zz_admin": "Admin", "zz_alice": "User", "zz_bob": "User",
           "zz_carol": "User", "zz_dave": "User", "zz_guest": "Guest"}
 FUTURE = (date.today() + timedelta(days=400)).isoformat()  # far enough ahead that RSVPs stay open whenever this runs
@@ -1064,6 +1064,53 @@ def main():
             r = teacher.put("/api/event", json={"id": ids["co"], "page_path": march_path})
             check(54, "the teacher, who can manage it, gets its id", r.status_code == 409 and code_of(r) == "page_taken"
                   and body_of(r).get("id") == ids["march"], f"{r.status_code} {body_of(r)}")
+
+        # ---------------------------------------------------------------- data the rules file does not know
+        with checking(55):
+            from sqlalchemy import update
+            from model import event_rules
+            from model.event import Event, EventFile
+            from model.event_backup import import_events
+            check(55, "a status event_rules.json does not list counts as private", event_rules.is_private("cancelled") and not event_rules.is_private("published"))
+            ids["odd"] = event_of(teacher.post("/api/event", json=mort("/events/verify-unknown-status/"))).get("id")
+            status(teacher, ids["odd"], "published")
+            db.session.execute(update(Event).where(Event.id == ids["odd"]).values({Event._status: "cancelled"}))  # as a row left by an older rules file
+            db.session.commit()
+            r = anon.get("/api/event", query_string={"id": ids["odd"]})
+            listed = [e.get("id") for e in body_of(anon.get("/api/event")).get("events", [])]
+            check(55, "so an event with one is hidden from an anonymous read and the public list",
+                  r.status_code == 404 and ids["odd"] not in listed, f"{r.status_code} listed={ids['odd'] in listed}")
+            check(55, "while its managers still see it", teacher.get("/api/event", query_string={"id": ids["odd"]}).status_code == 200)
+
+            moment = "2027-06-01T17:00:00.000000Z"
+            event_row = lambda path, state: {"page_path": path, "title": "Imported", "owner": "zz_teacher", "starts_at": moment, "ends_at": moment,
+                                             "timezone": "America/Los_Angeles", "status": state, "data": {"date": "2027-06-01"}}
+            person_row = lambda uid, role, rsvp: {"event": "/events/verify-import/", "uid": uid, "role": role, "rsvp": rsvp}
+            file_row = lambda **item: {"event": "/events/verify-import/", "group": "workshop-gallery", "kind": "gallery", "name": "x", "uploader_uid": "zz_teacher", **item}
+            result = import_events({
+                "events": [event_row("/events/verify-import/", "published"), event_row("/events/verify-import-odd/", "cancelled")],
+                "event_participants": [person_row("zz_alice", "attendee", "going"), person_row("zz_bob", "boss", "going"), person_row("zz_dave", "attendee", "maybe")],
+                "event_files": [file_row(key="901/aa.png", content_type="text/html", size=10, alt="A photo"),
+                                file_row(key="901/bb.html", content_type="text/html", size=10),
+                                file_row(link="https://evil.test\\@www.youtube.com/watch?v=x")],
+            })
+            counts = {table: (r["imported"], r["failed"]) for table, r in result.items()}
+            check(55, "import refuses an event whose status the rules file does not list", counts.get("events") == (1, 1)
+                  and "status" in " ".join(result["events"]["errors"]), result.get("events"))
+            check(55, "and a participant whose role or rsvp the service does not have", counts.get("event_participants") == (1, 2)
+                  and "role" in " ".join(result["event_participants"]["errors"]) and "rsvp" in " ".join(result["event_participants"]["errors"]), result.get("event_participants"))
+            saved_type = (EventFile.query.filter_by(_key="901/aa.png").first() or EventFile).content_type
+            check(55, "a stored file's content_type comes from its extension (image/png), never from the bundle (text/html)",
+                  saved_type == "image/png", saved_type)
+            check(55, "a stored file with an extension the service does not send, and a video link a page could not trust, are refused",
+                  counts.get("event_files") == (1, 2), result.get("event_files"))
+
+            youtube = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"  # already in co's gallery (check 42)
+            for label, link in (("the same video link again", youtube), ("the same link written another way", "HTTPS://www.youtube.com/watch?v=dQw4w9WgXcQ")):
+                r = upload(teacher, ids["co"], "gallery", "Recording again", link=link)
+                check(55, f"{label} in the same group is 409 link_taken", r.status_code == 409 and code_of(r) == "link_taken", f"{r.status_code} {body_of(r)}")
+            r = upload(teacher, ids["co"], "gallery", "Recording", link=youtube, group="other-gallery")
+            check(55, "while another group can have it (201)", r.status_code == 201, f"{r.status_code} {body_of(r)}")
 
         # ---------------------------------------------------------------- error extras: last, so it reads every answer
         with checking(48):

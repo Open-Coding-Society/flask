@@ -8,11 +8,16 @@ never by database ids, because ids change when tables are rebuilt:
 
 Users are imported before this runs, so people are matched by uid. Import skips anything that already exists,
 so running it twice is safe. Only the rows travel: the files' bytes stay on the instance volume or in S3.
+
+A bundle is not trusted further than the rules: a status, role or rsvp the service does not have is refused, a
+stored file's content type comes from its extension (never from the bundle, so nothing is ever served as html),
+and a video link must pass the gallery's own check.
 """
 from datetime import datetime
 
 from __init__ import db
-from model.event import Event, EventFile, EventParticipant
+from model import event_fields, event_rules, event_storage
+from model.event import RSVPS, Event, EventFile, EventParticipant
 from model.user import User
 
 KEYS = ('events', 'event_participants', 'event_files')
@@ -52,6 +57,16 @@ def export_events():
     }
 
 
+def _file_type(key):
+    """The content type of a stored file, from its key's extension, or None for a hosted video (no key)."""
+    if not key:
+        return None
+    extension = key.rsplit(".", 1)[1].lower() if "." in key else ""
+    if extension not in event_storage.EXT_TYPES:
+        raise ValueError(f"key {key!r} has an extension the service does not send")
+    return event_storage.EXT_TYPES[extension]
+
+
 def _result():
     return {'imported': 0, 'skipped': 0, 'failed': 0, 'errors': []}
 
@@ -76,6 +91,8 @@ def import_events(data):
                     continue
                 if item.get('owner') not in user_id:
                     raise ValueError(f"no user {item.get('owner')}")
+                if item.get('status') not in event_rules.statuses():
+                    raise ValueError(f"status {item.get('status')!r} is not in event_rules.json")
                 event = Event(item['page_path'], item['title'], db.session.get(User, user_id[item['owner']]))
                 event._starts_at, event._ends_at = _dt(item['starts_at']), _dt(item['ends_at'])
                 event._timezone, event._status = item['timezone'], item['status']
@@ -102,6 +119,10 @@ def import_events(data):
                 if EventParticipant.query.filter_by(_event_id=event_id[item['event']], _user_id=user_id[item['uid']]).first():
                     res['skipped'] += 1
                     continue
+                if item.get('role') not in event_rules.participant_roles():
+                    raise ValueError(f"role {item.get('role')!r} is not in event_rules.json")
+                if item.get('rsvp') is not None and item['rsvp'] not in RSVPS:
+                    raise ValueError(f"rsvp {item['rsvp']!r} is not one of {', '.join(RSVPS)}")
                 row = EventParticipant(db.session.get(Event, event_id[item['event']]), db.session.get(User, user_id[item['uid']]))
                 row.role, row.rsvp, row.rsvp_at = item['role'], item.get('rsvp'), _dt(item.get('rsvp_at'))
                 row.checked_in_at, row.check_in_method = _dt(item.get('checked_in_at')), item.get('check_in_method')
@@ -124,10 +145,14 @@ def import_events(data):
                 if existing:
                     res['skipped'] += 1
                     continue
+                content_type, link = _file_type(item.get('key')), None
+                if not item.get('key'):
+                    link = event_fields.video_link(item.get('link'), EventFile.__table__.c['_link'].type.length)
+                    if link is None:
+                        raise ValueError(f"link {item.get('link')!r} is not a video link the gallery takes")
                 row = EventFile(db.session.get(Event, event_id[item['event']]), group=item['group'], kind=item['kind'],
                                 name=item['name'], uploader_uid=item.get('uploader_uid') or '', alt=item.get('alt'),
-                                key=item.get('key'), link=item.get('link'), content_type=item.get('content_type'),
-                                size=item.get('size'))
+                                key=item.get('key'), link=link, content_type=content_type, size=item.get('size'))
                 if item.get('created_at'):
                     row._created_at = _dt(item['created_at'])
                 db.session.add(row)

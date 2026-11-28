@@ -76,6 +76,7 @@ MESSAGES = {
     'bad_alt': "Describe the image in 1 to {limit} characters (alt), so screen readers can say what it shows",
     'bad_item': "Send either a file (content) or a video link (link), not both",
     'bad_video': "Video links go in the gallery and must be https links to {hosts}",
+    'link_taken': "That video link is already in this group",
     'no_person': "No account has the uid {uid}",
     'bad_role': "role must be one of {roles}",
     'mine_needs_login': "Sign in to see your events",
@@ -117,6 +118,7 @@ SCHEDULE_KEYS = ('date', 'start_time', 'end_time', 'timezone')  # the keys that 
 
 # What a participant's RSVP and check-in can be. These are the service's own words, not data: pages read them.
 GOING, WAITLIST, DECLINED = 'going', 'waitlist', 'declined'
+RSVPS = (GOING, WAITLIST, DECLINED)  # or None, for a walk-in
 BY_QR, BY_ORGANIZER = 'qr', 'organizer'
 # Mort's feature keys that switch a rule on (the features list in event_rules.json)
 REGISTRATION, ATTENDANCE, GALLERY = 'registration', 'attendance', 'gallery'
@@ -744,6 +746,8 @@ class Event(db.Model):
         saved = event_fields.video_link(link, _length(EventFile, '_link')) if kind == GALLERY else None
         if saved is None:
             raise EventError('bad_video', hosts=list(event_rules.video_hosts()))
+        if self.files.filter_by(_group=group, _link=saved).first() is not None:
+            raise EventError('link_taken', 409)  # the backup bundle matches videos by group and link, so each is once
         title = name.strip() if isinstance(name, str) else ""
         if not title or len(title) > event_rules.limit('text'):
             raise _bad_field(event_fields.FieldError('name', 'name', event_rules.limit('text')))
@@ -849,7 +853,7 @@ class Event(db.Model):
         included. since keeps the events that end on or after that date's midnight in default_timezone."""
         query = Event.query
         if managed_by is None:
-            query = query.filter(Event._status.notin_([s for s in event_rules.statuses() if event_rules.is_private(s)]))
+            query = query.filter(Event._status.in_([s for s in event_rules.statuses() if not event_rules.is_private(s)]))
         elif not managed_by.is_staff():
             managed = (db.session.query(EventParticipant._event_id)
                        .filter(EventParticipant._user_id == managed_by.id,
