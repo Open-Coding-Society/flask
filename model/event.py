@@ -20,10 +20,8 @@ Times are stored as naive UTC, like presence (model/presence.py), and read out w
 import base64
 import hashlib
 import hmac
-import io
 import re
 import secrets
-import zipfile
 from datetime import datetime, time, timedelta, timezone
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -34,7 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from werkzeug.utils import secure_filename
 
 from __init__ import db
-from model import account_types, event_rules, event_storage, permissions
+from model import account_types, event_fields, event_rules, event_storage, permissions
 from model.presence import to_iso_z, utc_now
 from model.presence_schedule import ScheduleError, check_timezone, parse_clock, parse_date
 from model.user import User
@@ -91,13 +89,6 @@ MESSAGES = {
 # What each status-gated action is called in not_open
 ACTION_WORDS = {'edit': "changes", 'rsvp': "RSVPs", 'check_in': "check-ins", 'files': "new files", 'delete': "deleting"}
 
-# What each kind of definition field must be, in bad_field
-KIND_WORDS = {
-    'text': "text", 'name': "text that is not blank", 'text_list': "a list of text", 'text_map': "a set of names and text",
-    'map_list': "a list of entries", 'object': "a set of fields", 'link': "a site path (/...) or an https link",
-    'days': "a whole number of days, 0 or more", 'markdown': "Markdown text", 'id': "a whole number or null",
-}
-
 
 class EventError(Exception):
     """A request the rules refuse. response() is ({message, code, ...}, http_status): code is the MESSAGES key, and
@@ -122,33 +113,7 @@ def _words(value):
     return ", ".join(str(item) for item in value) if isinstance(value, (list, tuple)) else str(value)
 
 
-""" The definition: Mort's front matter keys that the service keeps in _data, each with its kind """
-
-# A kind is (kind, the limit in event_rules.json that sizes it), or a dict for an object with a kind per key.
-TEXT, NAME, LINK = ('text', 'text'), ('name', 'text'), ('link', 'text')
-DEFINITION_FIELDS = {
-    'description': ('text', 'description'),
-    'categories': ('text_list', 'text'),
-    'event_type': NAME,
-    'location': {'name': TEXT, 'address': TEXT, 'url': LINK},
-    'organizer': {'name': TEXT, 'uids': ('text_list', 'text')},
-    'attachments': ('map_list', {'type': NAME, 'id': NAME}),
-    'image': LINK,
-    'image_alt': TEXT,
-    'image_credit': {'name': TEXT, 'url': LINK},
-    'presenters': ('map_list', {'name': NAME, 'role': TEXT}),
-    'schedule': ('map_list', {'time': TEXT, 'title': NAME, 'detail': TEXT}),
-    'presentation': LINK,
-    'template': NAME,
-    'labels': ('text_map', 'text'),
-    'alert_days': ('days', 'alert_days'),
-    'body': ('markdown', 'body'),
-}
-SCHEDULE_KEYS = ('date', 'start_time', 'end_time', 'timezone')
-DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")  # [0-9], not \d, which takes other scripts' digits too
-CLOCK = re.compile(r"[0-9]{2}:[0-9]{2}")
-SITE_PATH_OR_HTTPS = re.compile(r"/(?![/\\])\S*|https://\S+", re.IGNORECASE)  # never //host or /\host, which leave the site
-GROUP = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+SCHEDULE_KEYS = ('date', 'start_time', 'end_time', 'timezone')  # the keys that set when an event runs
 
 # What a participant's RSVP and check-in can be. These are the service's own words, not data: pages read them.
 GOING, WAITLIST, DECLINED = 'going', 'waitlist', 'declined'
@@ -162,79 +127,21 @@ def _length(model, column):
     return model.__table__.c[column].type.length
 
 
-LIST_KINDS = ('text_list', 'text_map', 'map_list')  # their bad_field also says how many items
-
-
-def _limit_words(kind, limit=None, items=None, keys=None):
-    """A kind's limit in words, for bad_field's message."""
-    if kind == 'object':
-        return "the keys " + ", ".join(keys)
-    if kind == 'id':
-        return "one number"
-    if kind in ('text_list', 'text_map'):
-        return f"{items} items of up to {limit} characters"
-    if kind == 'map_list':
-        return f"{items} items"
-    if kind == 'days':
-        return f"{limit} days"
-    return f"{limit:,} characters"
-
-
-def _bad_field(field, kind, limit=None, items=None, keys=None):
-    """bad_field for one field. The answer carries ids and numbers a page can word: kind (a KIND_WORDS id), limit
-    (null when the kind has none), items for a list and keys for an object. The message says the same in words."""
-    extra = {'items': items} if items is not None else {}
-    if keys is not None:
-        extra['keys'] = list(keys)
-    return EventError('bad_field', field=field, kind=kind, limit=limit, **extra,
-                      words={'kind': KIND_WORDS[kind], 'limit': _limit_words(kind, limit, items, keys)})
+def _bad_field(error):
+    """The bad_field answer for a field event_fields refused: its ids and numbers travel, its words fill in the message."""
+    return EventError('bad_field', words=error.words, **error.fields)
 
 
 def _clean(field, kind, value):
-    """The value of one definition field as it is saved, or EventError('bad_field'). Unknown keys inside an
-    object are dropped, as unknown keys of the definition are."""
-    if isinstance(kind, dict):
-        if not isinstance(value, dict):
-            raise _bad_field(field, 'object', keys=kind)
-        return {key: _clean(f"{field}.{key}", sub, value[key]) for key, sub in kind.items() if value.get(key) is not None}
-    name, limit = kind
-    if name not in KIND_WORDS:
-        raise ValueError(f"DEFINITION_FIELDS: {field} has a kind the service does not know: {name}")
-    size = event_rules.limit(limit) if isinstance(limit, str) else None  # a map_list's limit is its entries' kinds
-    bad = _bad_field(field, name, size, event_rules.limit('list') if name in LIST_KINDS else None)
-    if name in ('text', 'name', 'link', 'markdown'):
-        if not isinstance(value, str) or len(value) > size:
-            raise bad
-        if name == 'name' and not value.strip():
-            raise bad
-        if name == 'link' and not SITE_PATH_OR_HTTPS.fullmatch(value):
-            raise bad
-        return value
-    if name == 'days':
-        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= size:
-            raise bad
-        return value
-    if name == 'text_list':
-        if not isinstance(value, list) or len(value) > event_rules.limit('list'):
-            raise bad
-        if not all(isinstance(item, str) and len(item) <= size for item in value):
-            raise bad
-        return list(value)
-    if name == 'text_map':
-        if not isinstance(value, dict) or len(value) > event_rules.limit('list'):
-            raise bad
-        if not all(isinstance(k, str) and k.strip() and len(k) <= size and isinstance(v, str) and len(v) <= size for k, v in value.items()):
-            raise bad
-        return dict(value)
-    if name == 'map_list':
-        if not isinstance(value, list) or len(value) > event_rules.limit('list') or not all(isinstance(item, dict) for item in value):
-            raise bad
-        return [_clean(field, limit, item) for item in value]
-    raise ValueError(f"DEFINITION_FIELDS: {field} has a kind that is not for a definition field: {name}")
+    """event_fields.clean, with a refusal answered as bad_field."""
+    try:
+        return event_fields.clean(field, kind, value)
+    except event_fields.FieldError as error:
+        raise _bad_field(error)
 
 
 def _clock(value, field):
-    if not isinstance(value, str) or not CLOCK.fullmatch(value):
+    if not isinstance(value, str) or not event_fields.CLOCK.fullmatch(value):
         raise EventError('bad_time', field=field)
     try:
         return parse_clock(value, field)
@@ -258,32 +165,6 @@ def _epoch_seconds(moment):
 
 def _size_words(size):
     return f"{size // 1000000} MB" if size % 1000000 == 0 else f"{size / 1000000:.1f} MB"
-
-
-# What a file of each extension starts with, so a file's contents must match its name. svg and html have no entry,
-# so they are never accepted, even if the data file lists them.
-def _zip_holding(member):
-    def holds(data):
-        if not data.startswith(b"PK\x03\x04"):
-            return False
-        try:
-            with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                return member in archive.namelist()
-        except (zipfile.BadZipFile, ValueError, OSError):
-            return False
-    return holds
-
-
-SIGNATURES = {
-    'pdf': lambda data: data.startswith(b"%PDF-"),
-    'png': lambda data: data.startswith(b"\x89PNG\r\n\x1a\n"),
-    'jpg': lambda data: data.startswith(b"\xff\xd8\xff"),
-    'jpeg': lambda data: data.startswith(b"\xff\xd8\xff"),
-    'gif': lambda data: data[:6] in (b"GIF87a", b"GIF89a"),
-    'webp': lambda data: data[:4] == b"RIFF" and data[8:12] == b"WEBP",
-    'docx': _zip_holding("word/document.xml"),
-    'pptx': _zip_holding("ppt/presentation.xml"),
-}
 
 
 class Event(db.Model):
@@ -446,7 +327,7 @@ class Event(db.Model):
             'counts': self.counts(),
             'files': [file.read() for file in self.files.order_by(EventFile.id)],
         }
-        for key in DEFINITION_FIELDS:
+        for key in event_fields.DEFINITION_FIELDS:
             if key in data and (include_body or key != 'body'):
                 event[key] = data[key]
         if self.can_manage(for_user):
@@ -584,8 +465,12 @@ class Event(db.Model):
                                              (EventParticipant._rsvp_at == row.rsvp_at) & (EventParticipant.id < row.id))).count()
         return ahead + 1
 
+    def _going(self):
+        """How many people are going: what capacity limits."""
+        return self.participants.filter_by(_rsvp=GOING).count()
+
     def counts(self):
-        going = self.participants.filter_by(_rsvp=GOING).count()
+        going = self._going()
         return {
             'going': going,
             'waitlist': self.participants.filter_by(_rsvp=WAITLIST).count(),
@@ -607,7 +492,7 @@ class Event(db.Model):
 
     def _promote(self):
         """Move waitlisted people to going, first in, first out, while there are spots."""
-        going = self.participants.filter_by(_rsvp=GOING).count()
+        going = self._going()
         waiting = self.participants.filter_by(_rsvp=WAITLIST).order_by(EventParticipant._rsvp_at, EventParticipant.id)
         for row in waiting:
             if self._capacity is not None and going >= self._capacity:
@@ -634,8 +519,7 @@ class Event(db.Model):
         if row is None:
             row = EventParticipant(self, user)
             db.session.add(row)
-        going = self.participants.filter_by(_rsvp=GOING).count()
-        row.rsvp = GOING if self._capacity is None or going < self._capacity else WAITLIST
+        row.rsvp = GOING if self._capacity is None or self._going() < self._capacity else WAITLIST
         row.rsvp_at = now
         db.session.commit()
         return row
@@ -765,7 +649,7 @@ class Event(db.Model):
             raise EventError('bad_kind', kinds=list(event_rules.kinds()))
         if kind == GALLERY and not self.features[GALLERY]:
             raise EventError('gallery_off', 409)
-        if not isinstance(group, str) or not GROUP.fullmatch(group):
+        if not isinstance(group, str) or not event_fields.GROUP.fullmatch(group):
             raise EventError('bad_group')
         if (content is None) == (link is None):
             raise EventError('bad_item')
@@ -782,7 +666,7 @@ class Event(db.Model):
         data = Event._decode(content)
         if len(data) > rule['max_bytes']:
             raise EventError('too_big', 413, max_bytes=rule['max_bytes'], words={'size': _size_words(rule['max_bytes'])})
-        check = SIGNATURES.get(extension)
+        check = event_fields.SIGNATURES.get(extension)
         if check is None or not check(data):
             raise EventError('bad_content')
         alt_text = Event._alt(alt, required=kind == GALLERY)
@@ -829,7 +713,7 @@ class Event(db.Model):
             raise bad
         title = name.strip() if isinstance(name, str) else ""
         if not title or len(title) > event_rules.limit('text'):
-            raise _bad_field('name', 'name', event_rules.limit('text'))
+            raise _bad_field(event_fields.FieldError('name', 'name', event_rules.limit('text')))
         row = EventFile(self, group=group, kind=kind, name=title, uploader_uid=actor.uid, link=link)
         db.session.add(row)
         db.session.commit()
@@ -910,7 +794,7 @@ class Event(db.Model):
         since = None
         if since_text is not None:
             try:
-                if not DATE.fullmatch(str(since_text)):
+                if not event_fields.DATE.fullmatch(str(since_text)):
                     raise ScheduleError("since")
                 since = parse_date(since_text, "since")
             except ScheduleError:
@@ -997,7 +881,7 @@ class Event(db.Model):
                 raise EventError('bad_notice')
             values['notice'] = notice or None
 
-        for key, kind in DEFINITION_FIELDS.items():
+        for key, kind in event_fields.DEFINITION_FIELDS.items():
             if key in inputs:
                 if inputs[key] is None:
                     data.pop(key, None)
@@ -1008,7 +892,7 @@ class Event(db.Model):
         if 'calendar_item_id' in inputs:
             item = inputs['calendar_item_id']
             if item is not None and (isinstance(item, bool) or not isinstance(item, int) or item < 1):
-                raise _bad_field('calendar_item_id', 'id')
+                raise _bad_field(event_fields.FieldError('calendar_item_id', 'id'))
             data['calendar_item_id'] = item
         values['data'] = data
         return values
@@ -1017,7 +901,7 @@ class Event(db.Model):
     def _schedule(written):
         """{timezone, starts_at, ends_at} from the date and times as written. No start_time means all day, from
         00:00 to the next 00:00; a start with no end runs to the end of that day."""
-        if not isinstance(written['date'], str) or not DATE.fullmatch(written['date']):
+        if not isinstance(written['date'], str) or not event_fields.DATE.fullmatch(written['date']):
             raise EventError('bad_date')
         try:
             day = parse_date(written['date'])
